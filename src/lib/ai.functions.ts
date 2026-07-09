@@ -19,10 +19,14 @@ function stripDangerousHtml(value: unknown) {
 
 function htmlDescription(value: unknown, fallbackValue: unknown) {
   const raw = stripDangerousHtml(value) || stripDangerousHtml(fallbackValue);
-  if (/<(p|div|br|ul|ol|li|img|strong|b|em|h[1-6])\b/i.test(raw)) return raw;
+  const fallbackImages = [...String(fallbackValue ?? "").matchAll(/<img\b[^>]*\bsrc\s*=\s*(["'])(.*?)\1[^>]*>/gi)].map((m) => m[0]);
+  if (/<(p|div|br|ul|ol|li|img|strong|b|em|h[1-6])\b/i.test(raw)) {
+    const hasImages = /<img\b/i.test(raw);
+    return hasImages || fallbackImages.length === 0 ? raw : `${raw}<br>${fallbackImages.join("<br>")}`;
+  }
   const text = cleanText(raw, String(fallbackValue ?? ""));
   const pieces = text.split(/(?<=[.!?])\s+(?=[A-Z0-9])/).map((part) => part.trim()).filter(Boolean).slice(0, 10);
-  return pieces.map((part, index) => index === 0 ? `<p><strong>${part}</strong></p>` : `<p>${part}</p>`).join("<br>");
+  return `${pieces.map((part, index) => index === 0 ? `<p><strong>${part}</strong></p>` : `<p>${part}</p>`).join("<br>")}${fallbackImages.length ? `<br>${fallbackImages.join("<br>")}` : ""}`;
 }
 
 function flattenImageInput(input: unknown): unknown[] {
