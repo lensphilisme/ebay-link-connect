@@ -763,7 +763,7 @@ async function createOrUpdateOffer(accessToken: string, offerBody: any) {
 const DISALLOWED_VARIATION_AXES = /^(volume|weight|department|type|brand|mpn|features?|country|upc|ean|isbn|gtin|model|condition)$/i;
 
 async function publishVariantGroup(accessToken: string, draft: any, policies: any, merchantLocationKey: string, variants: DraftVariant[], aspectCatalog: Record<string, { required: boolean; allowed?: string[]; maxLen?: number }>) {
-  const rawAxes = safeVariationAxes(draft, variants[0], aspectCatalog);
+  const rawAxes = safeVariationAxes(draft, variants[0], aspectCatalog, variants);
   // Drop axes eBay never accepts as variation specifics (e.g. Volume, Weight, Department).
   let axes = rawAxes.filter((a) => !DISALLOWED_VARIATION_AXES.test(a));
   if (axes.length === 0) axes = ["Style"];
