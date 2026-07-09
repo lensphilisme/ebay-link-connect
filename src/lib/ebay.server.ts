@@ -1,3 +1,5 @@
+import { classifyAxis } from "./variant-classifier";
+
 const EBAY_API_BASE = process.env.EBAY_API_BASE || "https://api.ebay.com";
 const EBAY_TRADING_ENDPOINT = "https://api.ebay.com/ws/api.dll";
 
@@ -646,28 +648,60 @@ function variantAxes(draft: any, sample: DraftVariant) {
 
 const ITEM_SPECIFIC_AXIS_CONFLICTS = new Set(["type", "brand", "model", "mpn", "condition", "features", "feature", "country", "material"]);
 
-function safeVariationAxes(draft: any, sample: DraftVariant, catalog: Record<string, { required: boolean; allowed?: string[]; maxLen?: number }>) {
-  const seen = new Set<string>();
+function splitVariantLabel(variant: DraftVariant): string[] {
+  const label = cleanText(variant.variantKey || variant.variantNameEn || variant.sku || variant.variantSku || variant.vid || "");
+  if (!label) return [];
+  return label.split(/[-,/|]+/).map((p) => cleanText(p)).filter(Boolean);
+}
+
+// Deterministic classification-based axis derivation.
+// Never trusts the CJ attribute name; classifies actual values across all variants.
+function safeVariationAxes(draft: any, _sample: DraftVariant, catalog: Record<string, { required: boolean; allowed?: string[]; maxLen?: number }>, allVariants?: DraftVariant[]) {
+  const variants = allVariants && allVariants.length ? allVariants : [_sample];
+  // 1) Build columns from splitting each variant label the same way.
+  const rows = variants.map(splitVariantLabel);
+  const columnCount = Math.max(1, ...rows.map((r) => r.length));
+  const columns: string[][] = Array.from({ length: columnCount }, (_, i) => rows.map((r) => r[i] || "").filter(Boolean));
+
+  // 2) Hints from CJ product key (e.g. "Color-Size").
+  const hintRaw = cleanText(draft?.profit?.product_key || draft?.productKeyEn || "");
+  const hints = hintRaw ? hintRaw.split(/[-,/|>]+/).map((a) => cleanText(a)) : [];
+
+  // 3) Classify each column and assign a safe axis name.
   const catalogLower = new Map(Object.keys(catalog || {}).map((name) => [name.toLowerCase(), catalog[name]]));
-  return variantAxes(draft, sample).map((raw, i) => {
-    const axis = cleanText(raw) || `Option ${i + 1}`;
+  const seen = new Set<string>();
+  const CATEGORY_TO_ASPECT: Record<string, string> = {
+    Color: "Color", Size: "Size", Material: "Material", Pattern: "Pattern",
+    Style: "Style", Capacity: "Capacity", Length: "Length", Width: "Width",
+    Height: "Height", Quantity: "Quantity", Model: "Model Number", Shape: "Shape",
+    Type: "Style", Version: "Style", Design: "Design", "Pack Size": "Pack Size", Layout: "Style",
+  };
+
+  const axes = columns.map((values, i) => {
+    const category = classifyAxis(values, hints[i]);
+    let axis = category === "Unknown" ? `Variant Option ${i + 1}` : (CATEGORY_TO_ASPECT[category] || category);
+    // Avoid axes that collide with required category aspects (eBay rejects those as variation specifics).
     const lower = axis.toLowerCase();
-    const conflictsWithRequiredSpecific = ITEM_SPECIFIC_AXIS_CONFLICTS.has(lower) || !!catalogLower.get(lower)?.required;
-    let safe = conflictsWithRequiredSpecific ? (/colou?r/i.test(axis) ? "Color" : /size/i.test(axis) ? "Size" : i === 0 ? "Style" : `Option ${i + 1}`) : axis;
-    while (seen.has(safe.toLowerCase())) safe = `${safe} ${i + 1}`;
-    seen.add(safe.toLowerCase());
-    return safe.slice(0, 40);
+    if (ITEM_SPECIFIC_AXIS_CONFLICTS.has(lower) || catalogLower.get(lower)?.required) {
+      axis = /colou?r/i.test(axis) ? "Color" : /size/i.test(axis) ? "Size" : `Variant Option ${i + 1}`;
+    }
+    while (seen.has(axis.toLowerCase())) axis = `${axis} ${i + 1}`;
+    seen.add(axis.toLowerCase());
+    return axis.slice(0, 40);
   });
+  return axes.length ? axes : ["Variant Option 1"];
 }
 
 function uniqueVariationOptions(variants: DraftVariant[], axes: string[]) {
   const seenCombos = new Set<string>();
   return variants.map((variant, index) => {
-    const raw = variantOptions(variant, axes);
+    const parts = splitVariantLabel(variant);
     const options: Record<string, string> = {};
-    for (const axis of axes) {
-      const value = shortenAspectValue(axis, raw[axis] || variant.variantKey || variant.variantNameEn || variant.variantSku || `Option ${index + 1}`);
-      options[axis] = value || `Option ${index + 1}`;
+    for (let i = 0; i < axes.length; i++) {
+      const axis = axes[i];
+      const raw = parts[i] || variant.variantKey || variant.variantNameEn || variant.variantSku || `Option ${index + 1}`;
+      const value = shortenAspectValue(axis, raw) || `Option ${index + 1}`;
+      options[axis] = value;
     }
     let combo = axes.map((axis) => options[axis].toLowerCase()).join("|");
     if (seenCombos.has(combo)) {
@@ -680,12 +714,6 @@ function uniqueVariationOptions(variants: DraftVariant[], axes: string[]) {
   });
 }
 
-function variantOptions(variant: DraftVariant, axes: string[]) {
-  const label = cleanText(variant.variantKey || variant.variantNameEn || variant.sku || variant.variantSku || variant.vid || "Option");
-  const parts = label.split(/[-,/|]+/).map((p) => cleanText(p)).filter(Boolean);
-  const values = parts.length === axes.length ? parts : axes.length === 1 ? [label] : axes.map((_, i) => parts[i] || label);
-  return Object.fromEntries(axes.map((axis, i) => [axis, values[i] || label]));
-}
 
 async function putInventoryItem(accessToken: string, sku: string, draft: any, imageUrls: string[], aspects: Record<string, string[]>) {
   if (imageUrls.length === 0) throw new Error(`eBay requires at least one valid http(s) image URL before publishing SKU ${sku}.`);
@@ -735,7 +763,7 @@ async function createOrUpdateOffer(accessToken: string, offerBody: any) {
 const DISALLOWED_VARIATION_AXES = /^(volume|weight|department|type|brand|mpn|features?|country|upc|ean|isbn|gtin|model|condition)$/i;
 
 async function publishVariantGroup(accessToken: string, draft: any, policies: any, merchantLocationKey: string, variants: DraftVariant[], aspectCatalog: Record<string, { required: boolean; allowed?: string[]; maxLen?: number }>) {
-  const rawAxes = safeVariationAxes(draft, variants[0], aspectCatalog);
+  const rawAxes = safeVariationAxes(draft, variants[0], aspectCatalog, variants);
   // Drop axes eBay never accepts as variation specifics (e.g. Volume, Weight, Department).
   let axes = rawAxes.filter((a) => !DISALLOWED_VARIATION_AXES.test(a));
   if (axes.length === 0) axes = ["Style"];
@@ -796,9 +824,9 @@ async function publishVariantGroup(accessToken: string, draft: any, policies: an
     body: JSON.stringify(groupBody),
   });
   let groupRes = await putGroup();
-  if (!groupRes.ok) {
+  for (let attempt = 0; attempt < 4 && !groupRes.ok; attempt++) {
     const errText = await groupRes.text();
-    // 25703: "SKU is already a member of another group". Remove the exact SKU from its old group, then retry this whole group.
+    // 25703: "SKU is already a member of another group". Parse ALL conflicts and free them.
     const conflicts = new Map<string, Set<string>>();
     const addConflict = (sku: string, group: string) => {
       if (!sku || !group) return;
@@ -815,16 +843,19 @@ async function publishVariantGroup(accessToken: string, draft: any, policies: an
         addConflict(String(sku || ""), String(group || ""));
       }
     } catch { /* use regex matches */ }
-    const conflicting = new Set(conflicts.keys());
-    if (conflicting.size > 0) {
-      for (const [key, skus] of conflicts) {
-        for (const sku of skus) await removeSkuFromInventoryItemGroup(accessToken, key, sku);
-      }
-      await deleteInventoryItemGroup(accessToken, groupKey);
-      groupRes = await putGroup();
+    if (conflicts.size === 0) {
+      throw new Error(`eBay variation group failed: ${errText}`);
     }
-    if (!groupRes.ok) throw new Error(`eBay variation group failed: ${await groupRes.text()}`);
+    for (const [key, skus] of conflicts) {
+      for (const sku of skus) await removeSkuFromInventoryItemGroup(accessToken, key, sku);
+      if (key !== groupKey) await deleteInventoryItemGroup(accessToken, key);
+    }
+    // Also proactively free every one of our variant SKUs from our own stale group (if any).
+    await deleteInventoryItemGroup(accessToken, groupKey);
+    groupRes = await putGroup();
   }
+  if (!groupRes.ok) throw new Error(`eBay variation group failed after conflict repair: ${await groupRes.text()}`);
+
 
   const publish = await fetch(`${EBAY_API_BASE}/sell/inventory/v1/offer/publish_by_inventory_item_group`, {
     method: "POST",
