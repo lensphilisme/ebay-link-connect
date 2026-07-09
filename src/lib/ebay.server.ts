@@ -639,8 +639,13 @@ async function createOrUpdateOffer(accessToken: string, offerBody: any) {
   return offerId!;
 }
 
+const DISALLOWED_VARIATION_AXES = /^(volume|weight|department|type|brand|mpn|features?|country|upc|ean|isbn|gtin|model|condition)$/i;
+
 async function publishVariantGroup(accessToken: string, draft: any, policies: any, merchantLocationKey: string, variants: DraftVariant[], aspectCatalog: Record<string, { required: boolean; allowed?: string[]; maxLen?: number }>) {
-  const axes = safeVariationAxes(draft, variants[0], aspectCatalog);
+  const rawAxes = safeVariationAxes(draft, variants[0], aspectCatalog);
+  // Drop axes eBay never accepts as variation specifics (e.g. Volume, Weight, Department).
+  let axes = rawAxes.filter((a) => !DISALLOWED_VARIATION_AXES.test(a));
+  if (axes.length === 0) axes = ["Style"];
   const optionsByVariant = uniqueVariationOptions(variants, axes);
   const groupKey = `${draft.sku || draft.cj_product_id}-grp`.replace(/[^A-Za-z0-9_-]/g, "-").slice(0, 50);
   const baseImages = normalizeImageUrls(draft.images);
@@ -656,7 +661,6 @@ async function publishVariantGroup(accessToken: string, draft: any, policies: an
     const optionAspects = optionsByVariant[index];
     const imageUrls = normalizeImageUrls(variant.variantImage, variant.image, baseImages, allImages);
     const aspects = filterAspectsByCategory(normalizeAspects(draft.item_specifics, draft, optionAspects, axes), aspectCatalog);
-    // ensure variation-axis values are present per-variant even if catalog excluded them
     for (const [k, v] of Object.entries(optionAspects)) if (v) aspects[k] = [String(v).slice(0, 65)];
     await putInventoryItem(accessToken, sku, draft, imageUrls, aspects);
     const variantPrice = priceNumber(variant.price ?? variant.variantSellPrice) || priceNumber(draft.price);
@@ -681,12 +685,25 @@ async function publishVariantGroup(accessToken: string, draft: any, policies: an
     variantSKUs,
     variesBy: { aspectsImageVariesBy: imageAxis ? [imageAxis] : undefined, specifications },
   };
-  const groupRes = await fetch(`${EBAY_API_BASE}/sell/inventory/v1/inventory_item_group/${encodeURIComponent(groupKey)}`, {
+  const putGroup = async () => fetch(`${EBAY_API_BASE}/sell/inventory/v1/inventory_item_group/${encodeURIComponent(groupKey)}`, {
     method: "PUT",
     headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json", "Content-Language": "en-US", "Accept-Language": "en-US" },
     body: JSON.stringify(groupBody),
   });
-  if (!groupRes.ok) throw new Error(`eBay variation group failed: ${await groupRes.text()}`);
+  let groupRes = await putGroup();
+  if (!groupRes.ok) {
+    const errText = await groupRes.text();
+    // 25703: "SKU is already a member of another group. groupId: XXX-grp" — delete that stale group and retry.
+    const conflicting = new Set<string>();
+    for (const m of errText.matchAll(/groupId:\s*([A-Za-z0-9_-]+)/g)) conflicting.add(m[1]);
+    for (const m of errText.matchAll(/"name":"text2","value":"([^"]+)"/g)) conflicting.add(m[1]);
+    if (conflicting.size > 0) {
+      for (const key of conflicting) await deleteInventoryItemGroup(accessToken, key);
+      await deleteInventoryItemGroup(accessToken, groupKey);
+      groupRes = await putGroup();
+    }
+    if (!groupRes.ok) throw new Error(`eBay variation group failed: ${await groupRes.text()}`);
+  }
 
   const publish = await fetch(`${EBAY_API_BASE}/sell/inventory/v1/offer/publish_by_inventory_item_group`, {
     method: "POST",
@@ -697,6 +714,7 @@ async function publishVariantGroup(accessToken: string, draft: any, policies: an
   if (!publish.ok) throw new Error(`eBay variation publish failed: ${publishJson.errors?.[0]?.longMessage || publishJson.errors?.[0]?.message || publishJson.message || JSON.stringify(publishJson)}`);
   return { offerId: null, listingId: publishJson.listingId, inventoryItemGroupKey: groupKey };
 }
+
 
 export async function publishInventoryItem(accessToken: string, draft: any) {
   const policies = await fetchDefaultSellerPolicies(accessToken);
