@@ -243,10 +243,58 @@ function cleanText(value: unknown, fallback = "") {
   return normalize(value) || normalize(fallback);
 }
 
+function escapeHtml(value: unknown) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function hasHtml(value: string) {
+  return /<(p|div|br|ul|ol|li|img|table|strong|b|em|span|h[1-6])\b/i.test(value);
+}
+
+function htmlFromPlainText(value: string) {
+  const lines = value.split(/\r?\n+/).map((line) => line.trim()).filter(Boolean);
+  const chunks = lines.length > 1 ? lines : value.split(/(?<=[.!?])\s+(?=[A-Z0-9])/).map((line) => line.trim()).filter(Boolean);
+  const bullets = chunks.filter((line) => /^[-•*]\s+/.test(line)).map((line) => line.replace(/^[-•*]\s+/, ""));
+  const paragraphs = chunks.filter((line) => !/^[-•*]\s+/.test(line)).slice(0, 8);
+  const body = paragraphs.map((line, index) => {
+    const text = escapeHtml(line);
+    return index === 0 ? `<p><strong>${text}</strong></p>` : `<p>${text}</p>`;
+  }).join("");
+  const list = bullets.length ? `<ul>${bullets.slice(0, 8).map((line) => `<li>${escapeHtml(line)}</li>`).join("")}</ul>` : "";
+  return body + list;
+}
+
+function sanitizeDescriptionHtml(value: unknown, fallback = "") {
+  const raw = String(value ?? "").trim() || String(fallback ?? "").trim();
+  const source = raw || "New item. Review the photos and selected option before checkout.";
+  let html = hasHtml(source) ? source : htmlFromPlainText(cleanText(source, fallback));
+  html = html
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<style[\s\S]*?<\/style>/gi, "")
+    .replace(/<(iframe|object|embed|form|input|button|meta|link)[\s\S]*?<\/\1>/gi, "")
+    .replace(/<\/?(iframe|object|embed|form|input|button|meta|link)[^>]*>/gi, "")
+    .replace(/\son[a-z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, "")
+    .replace(/(href|src)\s*=\s*(["'])\s*javascript:[\s\S]*?\2/gi, "$1=$2#$2")
+    .replace(/<img\b([^>]*)>/gi, (_match, attrs) => {
+      const src = String(attrs).match(/\ssrc\s*=\s*(["'])(.*?)\1/i)?.[2] || String(attrs).match(/\ssrc\s*=\s*([^\s>]+)/i)?.[1] || "";
+      if (!/^https?:\/\//i.test(src)) return "";
+      const alt = String(attrs).match(/\salt\s*=\s*(["'])(.*?)\1/i)?.[2] || "Product image";
+      return `<p><img src="${escapeHtml(src)}" alt="${escapeHtml(alt)}" style="max-width:100%;height:auto;border:0;display:block;margin:12px 0;" /></p>`;
+    })
+    .replace(/<(p|div|li|ul|ol|br|strong|b|em|span|table|tbody|thead|tr|td|th|h1|h2|h3|h4|h5|h6)(\s[^>]*)?>/gi, (tag) => tag)
+    .trim();
+  return `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.55;color:#111;">${html}</div>`;
+}
+
 function safeDescription(draft: any) {
   const bulletText = Array.isArray(draft.bullet_features) ? draft.bullet_features.join(". ") : "";
   const title = safeTitle(draft.title, draft.sku);
-  return cleanText(draft.description, `${title}. ${bulletText}. New item. Review photos and selected option before checkout.`) || title;
+  return sanitizeDescriptionHtml(draft.description, `${title}. ${bulletText}. New item. Review photos and selected option before checkout.`) || title;
 }
 
 function safeTitle(value: unknown, fallback: unknown) {
