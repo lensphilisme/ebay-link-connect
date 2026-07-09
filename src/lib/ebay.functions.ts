@@ -321,20 +321,27 @@ export const pushDraftsToEbay = createServerFn({ method: "POST" })
     for (const draft of drafts || []) {
       try {
         if (!draft.category_id) throw new Error("Missing eBay category");
+        // Always hydrate the full CJ variant group first; a chosen VID must not publish alone when the product has sibling variants.
+        let workingDraft = draft;
+        if (draft.cj_product_id && draftVariantCount(workingDraft) <= 1) {
+          try {
+            const repaired = await autoRepairDraftFromCj(context, workingDraft, "Refreshing full CJ variant group before eBay push");
+            if (draftVariantCount(repaired) > draftVariantCount(workingDraft)) workingDraft = repaired;
+          } catch { /* publish the existing draft if CJ refresh is unavailable */ }
+        }
         // Duplicate guard: refuse to push the same CJ product twice.
-        if (draft.cj_product_id) {
+        if (workingDraft.cj_product_id) {
           const { data: existing } = await context.supabase
             .from("ebay_listings")
             .select("id,ebay_item_id")
             .eq("user_id", context.userId)
-            .eq("cj_product_id", draft.cj_product_id)
+            .eq("cj_product_id", workingDraft.cj_product_id)
             .in("status", ["active", "pushed"])
             .limit(1)
             .maybeSingle();
           if (existing?.id) throw new Error(`Already listed on eBay (item ${existing.ebay_item_id || existing.id}). Skipping duplicate.`);
         }
         // Ensure start_country is set from CJ so inventory location is valid.
-        let workingDraft = draft;
         if (!draft.profit?.start_country) {
           try {
             const { cjProductDetail, getUserCjToken } = await import("./cj.server");
@@ -351,14 +358,6 @@ export const pushDraftsToEbay = createServerFn({ method: "POST" })
             workingDraft = { ...draft, profit: { ...(draft.profit || {}), cj_warehouse: warehouse } };
             await context.supabase.from("listing_drafts").update({ profit: workingDraft.profit }).eq("id", draft.id);
           }
-        }
-        // If this CJ product has multiple VIDs, refresh the full CJ variant group before publishing.
-        // This prevents a selected single variant from being marked successful while sibling variants were never sent.
-        if (draft.cj_product_id && draftVariantCount(workingDraft) <= 1) {
-          try {
-            const repaired = await autoRepairDraftFromCj(context, workingDraft, "Refreshing full CJ variant group before eBay push");
-            if (draftVariantCount(repaired) > draftVariantCount(workingDraft)) workingDraft = repaired;
-          } catch { /* publish the existing draft if CJ refresh is unavailable */ }
         }
         let pushed: any;
         let lastError: unknown = null;
