@@ -52,23 +52,37 @@ function SettingsPage() {
         <IntegrationCard
           icon={Boxes}
           title="CJ Dropshipping"
-          desc="Personal access token from your CJ developer account — powers product search, freight quotes, categories and warehouses."
-          status={cjCred.is_active ? (cjCred.source === "env" ? "Connected (workspace token)" : "Connected") : "Not connected"}
+          desc="Enter your CJ account email and API key once — the app fetches, refreshes and renews access tokens automatically in the background."
+          status={cjCred.is_active ? (cjCred.source === "env" ? "Connected (workspace key)" : "Connected") : "Not connected"}
           ready={cjCred.is_active}
         >
           <div className="space-y-2">
+            <Input
+              type="email"
+              value={cjEmail}
+              onChange={(e) => setCjEmail(e.target.value)}
+              placeholder={status?.cj.email || "CJ account email"}
+            />
             <div className="flex gap-2">
-              <Input value={cjToken} onChange={(e) => setCjToken(e.target.value)} placeholder="Paste CJ access token" />
-              <Button onClick={() => saveCj.mutate()} disabled={!cjToken || saveCj.isPending}>Save</Button>
+              <Input
+                type="password"
+                value={cjApiKey}
+                onChange={(e) => setCjApiKey(e.target.value)}
+                placeholder="CJ API key"
+              />
+              <Button onClick={() => saveCj.mutate()} disabled={!cjApiKey || (!cjEmail && !status?.cj.email) || saveCj.isPending}>
+                {saveCj.isPending ? "Connecting…" : "Save"}
+              </Button>
             </div>
             <p className="text-xs text-muted-foreground">
-              Get a token at{" "}
+              Get your API key at{" "}
               <a className="text-primary underline inline-flex items-center gap-1" href="https://developers.cjdropshipping.com" target="_blank" rel="noreferrer">
                 developers.cjdropshipping.com <ExternalLink className="h-3 w-3" />
-              </a>{" "}— API → personal token.
+              </a>{" "}— My API → API key. Access &amp; refresh tokens are handled for you.
             </p>
           </div>
         </IntegrationCard>
+
 
         <IntegrationCard
           icon={Tag}
