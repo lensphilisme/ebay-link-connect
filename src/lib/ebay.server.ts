@@ -193,6 +193,41 @@ export async function deleteInventoryItemGroup(accessToken: string, groupKey: st
   } catch { /* ignore */ }
 }
 
+async function getInventoryItemGroup(accessToken: string, groupKey: string) {
+  const res = await fetch(`${EBAY_API_BASE}/sell/inventory/v1/inventory_item_group/${encodeURIComponent(groupKey)}`, {
+    headers: { Authorization: `Bearer ${accessToken}`, "Accept-Language": "en-US" },
+  });
+  if (!res.ok) return null;
+  return res.json().catch(() => null);
+}
+
+async function removeSkuFromInventoryItemGroup(accessToken: string, groupKey: string, sku: string) {
+  const group = await getInventoryItemGroup(accessToken, groupKey);
+  if (!group) {
+    await deleteInventoryItemGroup(accessToken, groupKey);
+    return false;
+  }
+  const remaining = (Array.isArray(group.variantSKUs) ? group.variantSKUs : [])
+    .map((value: unknown) => String(value))
+    .filter((value: string) => value && value !== sku);
+  if (remaining.length === 0) {
+    await deleteInventoryItemGroup(accessToken, groupKey);
+    return true;
+  }
+  const next = { ...group, variantSKUs: remaining };
+  delete next.inventoryItemGroupKey;
+  const res = await fetch(`${EBAY_API_BASE}/sell/inventory/v1/inventory_item_group/${encodeURIComponent(groupKey)}`, {
+    method: "PUT",
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json", "Content-Language": "en-US", "Accept-Language": "en-US" },
+    body: JSON.stringify(next),
+  });
+  if (!res.ok) {
+    await deleteInventoryItemGroup(accessToken, groupKey);
+    return false;
+  }
+  return true;
+}
+
 
 export async function getCategorySuggestions(accessToken: string, q: string, marketplaceId = "EBAY_US") {
   const treeRes = await fetch(`${EBAY_API_BASE}/commerce/taxonomy/v1/get_default_category_tree_id?marketplace_id=${marketplaceId}`, {
