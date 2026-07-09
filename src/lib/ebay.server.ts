@@ -214,17 +214,20 @@ async function removeSkuFromInventoryItemGroup(accessToken: string, groupKey: st
     await deleteInventoryItemGroup(accessToken, groupKey);
     return true;
   }
-  const next = { ...group, variantSKUs: remaining };
-  delete next.inventoryItemGroupKey;
+  const next = stripEmpty({
+    title: group.title,
+    description: group.description,
+    aspects: group.aspects,
+    imageUrls: group.imageUrls,
+    variantSKUs: remaining,
+    variesBy: group.variesBy,
+  });
   const res = await fetch(`${EBAY_API_BASE}/sell/inventory/v1/inventory_item_group/${encodeURIComponent(groupKey)}`, {
     method: "PUT",
     headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json", "Content-Language": "en-US", "Accept-Language": "en-US" },
     body: JSON.stringify(next),
   });
-  if (!res.ok) {
-    await deleteInventoryItemGroup(accessToken, groupKey);
-    return false;
-  }
+  if (!res.ok) throw new Error(`Could not remove SKU ${sku} from existing eBay group ${groupKey}: ${await res.text()}`);
   return true;
 }
 
