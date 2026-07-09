@@ -348,14 +348,21 @@ export const pushDraftsToEbay = createServerFn({ method: "POST" })
           }
         }
         let pushed: any;
-        try {
-          pushed = await publishInventoryItem(token, workingDraft);
-        } catch (firstError) {
-          const firstMessage = firstError instanceof Error ? firstError.message : String(firstError);
-          if (!draft.cj_product_id || !shouldAutoRepair(firstMessage)) throw firstError;
-          workingDraft = await autoRepairDraftFromCj(context, workingDraft, firstMessage);
-          pushed = await publishInventoryItem(token, workingDraft);
+        let lastError: unknown = null;
+        for (let attempt = 0; attempt < 4; attempt++) {
+          try {
+            pushed = await publishInventoryItem(token, workingDraft);
+            lastError = null;
+            break;
+          } catch (err) {
+            lastError = err;
+            const message = err instanceof Error ? err.message : String(err);
+            if (!draft.cj_product_id || !shouldAutoRepair(message) || attempt === 3) throw err;
+            workingDraft = await autoRepairDraftFromCj(context, workingDraft, message);
+          }
         }
+        if (lastError) throw lastError;
+
         await context.supabase.from("ebay_listings").insert({ user_id: context.userId, draft_id: draft.id, ebay_item_id: pushed.listingId, ebay_offer_id: pushed.offerId, sku: draft.sku, title: draft.title, price: draft.price, cj_product_id: draft.cj_product_id, status: "active", cj_landed_cost: Number((draft.profit || {}).item_cost || 0) + Number((draft.profit || {}).shipping || 0) });
         // Auto-remove pushed draft from queue.
         await context.supabase.from("listing_drafts").delete().eq("id", draft.id);
