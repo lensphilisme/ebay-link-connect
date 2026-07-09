@@ -174,44 +174,73 @@ export const syncEbayListings = createServerFn({ method: "POST" })
     const token = await getFreshEbayToken(context.supabase, context.userId);
     const perPage = data.entriesPerPage ?? 200;
     let page = 1;
-    let totalSynced = 0;
     let grandTotal = 0;
-    // eBay caps GetMyeBaySelling at 200 per page; walk until we've covered TotalNumberOfEntries.
+    // Dedupe items across pages by ebay_item_id (eBay pagination can overlap).
+    const seen = new Map<string, any>();
     while (true) {
       const result = await fetchActiveEbayListings(token, page, perPage);
       grandTotal = result.total;
       for (const item of result.items) {
-        const row = {
-          user_id: context.userId,
-          ebay_item_id: item.itemId,
-          sku: item.sku,
-          title: item.title,
-          price: item.price,
-          currency: item.currency,
-          marketplace_id: "EBAY_US",
-          status: "active",
-          sales: item.quantitySold,
-          views: item.watchCount,
-          image_url: item.imageUrl || null,
-          listed_at: item.listedAt || undefined,
-        };
-        const { data: existingRows } = await context.supabase.from("ebay_listings").select("id").eq("user_id", context.userId).eq("ebay_item_id", item.itemId).limit(10);
-        const existing = existingRows?.[0];
-        if (existing?.id) {
-          await context.supabase.from("ebay_listings").update(row).eq("id", existing.id);
-          const duplicateIds = (existingRows || []).slice(1).map((r: any) => r.id);
-          if (duplicateIds.length) await context.supabase.from("ebay_listings").delete().in("id", duplicateIds);
-        }
-        else await context.supabase.from("ebay_listings").insert(row);
+        if (!item.itemId) continue;
+        if (!seen.has(item.itemId)) seen.set(item.itemId, item);
       }
-      totalSynced += result.items.length;
-      if (result.items.length < perPage || totalSynced >= grandTotal) break;
+      if (result.items.length < perPage || seen.size >= grandTotal) break;
       page += 1;
       if (page > 50) break; // safety cap ~10k listings
     }
-    await context.supabase.from("activity_logs").insert({ user_id: context.userId, level: "success", category: "ebay", message: `Synced ${totalSynced} of ${grandTotal} active eBay listings`, metadata: { total: grandTotal, synced: totalSynced } });
-    return { total: grandTotal, synced: totalSynced };
+    const uniqueItems = Array.from(seen.values());
+    // Enrich thumbnails via public Shopping API (GetMyeBaySelling doesn't return them).
+    const missingImgIds = uniqueItems.filter((i) => !i.imageUrl).map((i) => i.itemId);
+    if (missingImgIds.length) {
+      try {
+        const imgMap = await fetchItemImagesShopping(missingImgIds);
+        for (const it of uniqueItems) if (!it.imageUrl && imgMap[it.itemId]) it.imageUrl = imgMap[it.itemId];
+      } catch { /* best effort */ }
+    }
+    // Upsert every unique active item.
+    for (const item of uniqueItems) {
+      const row = {
+        user_id: context.userId,
+        ebay_item_id: item.itemId,
+        sku: item.sku,
+        title: item.title,
+        price: item.price,
+        currency: item.currency,
+        marketplace_id: "EBAY_US",
+        status: "active",
+        sales: item.quantitySold,
+        views: item.watchCount,
+        image_url: item.imageUrl || null,
+        listed_at: item.listedAt || undefined,
+      };
+      const { data: existingRows } = await context.supabase.from("ebay_listings").select("id").eq("user_id", context.userId).eq("ebay_item_id", item.itemId).limit(10);
+      const existing = existingRows?.[0];
+      if (existing?.id) {
+        await context.supabase.from("ebay_listings").update(row).eq("id", existing.id);
+        const duplicateIds = (existingRows || []).slice(1).map((r: any) => r.id);
+        if (duplicateIds.length) await context.supabase.from("ebay_listings").delete().in("id", duplicateIds);
+      } else await context.supabase.from("ebay_listings").insert(row);
+    }
+    // Prune stale: mark rows as 'ended' when they're no longer in eBay's active set.
+    const seenIds = Array.from(seen.keys());
+    let pruned = 0;
+    if (seenIds.length > 0) {
+      const { data: stale } = await context.supabase
+        .from("ebay_listings")
+        .select("id,ebay_item_id")
+        .eq("user_id", context.userId)
+        .eq("status", "active")
+        .not("ebay_item_id", "in", `(${seenIds.map((v) => `"${v}"`).join(",")})`);
+      pruned = stale?.length || 0;
+      if (pruned > 0) {
+        await context.supabase.from("ebay_listings").delete().in("id", (stale || []).map((r: any) => r.id));
+      }
+    }
+    const synced = uniqueItems.length;
+    await context.supabase.from("activity_logs").insert({ user_id: context.userId, level: "success", category: "ebay", message: `Synced ${synced} active eBay listings (removed ${pruned} stale)`, metadata: { total: grandTotal, synced, pruned } });
+    return { total: grandTotal, synced, pruned };
   });
+
 
 export const suggestEbayCategories = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
