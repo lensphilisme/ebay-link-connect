@@ -1,4 +1,4 @@
-import { classifyAxis, classifyVariantValue } from "./variant-classifier";
+import { classifyAxis } from "./variant-classifier";
 
 const EBAY_API_BASE = process.env.EBAY_API_BASE || "https://api.ebay.com";
 const EBAY_TRADING_ENDPOINT = "https://api.ebay.com/ws/api.dll";
