@@ -193,6 +193,44 @@ export async function deleteInventoryItemGroup(accessToken: string, groupKey: st
   } catch { /* ignore */ }
 }
 
+async function getInventoryItemGroup(accessToken: string, groupKey: string) {
+  const res = await fetch(`${EBAY_API_BASE}/sell/inventory/v1/inventory_item_group/${encodeURIComponent(groupKey)}`, {
+    headers: { Authorization: `Bearer ${accessToken}`, "Accept-Language": "en-US" },
+  });
+  if (!res.ok) return null;
+  return res.json().catch(() => null);
+}
+
+async function removeSkuFromInventoryItemGroup(accessToken: string, groupKey: string, sku: string) {
+  const group = await getInventoryItemGroup(accessToken, groupKey);
+  if (!group) {
+    await deleteInventoryItemGroup(accessToken, groupKey);
+    return false;
+  }
+  const remaining = (Array.isArray(group.variantSKUs) ? group.variantSKUs : [])
+    .map((value: unknown) => String(value))
+    .filter((value: string) => value && value !== sku);
+  if (remaining.length === 0) {
+    await deleteInventoryItemGroup(accessToken, groupKey);
+    return true;
+  }
+  const next = stripEmpty({
+    title: group.title,
+    description: group.description,
+    aspects: group.aspects,
+    imageUrls: group.imageUrls,
+    variantSKUs: remaining,
+    variesBy: group.variesBy,
+  });
+  const res = await fetch(`${EBAY_API_BASE}/sell/inventory/v1/inventory_item_group/${encodeURIComponent(groupKey)}`, {
+    method: "PUT",
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json", "Content-Language": "en-US", "Accept-Language": "en-US" },
+    body: JSON.stringify(next),
+  });
+  if (!res.ok) throw new Error(`Could not remove SKU ${sku} from existing eBay group ${groupKey}: ${await res.text()}`);
+  return true;
+}
+
 
 export async function getCategorySuggestions(accessToken: string, q: string, marketplaceId = "EBAY_US") {
   const treeRes = await fetch(`${EBAY_API_BASE}/commerce/taxonomy/v1/get_default_category_tree_id?marketplace_id=${marketplaceId}`, {
@@ -243,10 +281,58 @@ function cleanText(value: unknown, fallback = "") {
   return normalize(value) || normalize(fallback);
 }
 
+function escapeHtml(value: unknown) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function hasHtml(value: string) {
+  return /<(p|div|br|ul|ol|li|img|table|strong|b|em|span|h[1-6])\b/i.test(value);
+}
+
+function htmlFromPlainText(value: string) {
+  const lines = value.split(/\r?\n+/).map((line) => line.trim()).filter(Boolean);
+  const chunks = lines.length > 1 ? lines : value.split(/(?<=[.!?])\s+(?=[A-Z0-9])/).map((line) => line.trim()).filter(Boolean);
+  const bullets = chunks.filter((line) => /^[-•*]\s+/.test(line)).map((line) => line.replace(/^[-•*]\s+/, ""));
+  const paragraphs = chunks.filter((line) => !/^[-•*]\s+/.test(line)).slice(0, 8);
+  const body = paragraphs.map((line, index) => {
+    const text = escapeHtml(line);
+    return index === 0 ? `<p><strong>${text}</strong></p>` : `<p>${text}</p>`;
+  }).join("");
+  const list = bullets.length ? `<ul>${bullets.slice(0, 8).map((line) => `<li>${escapeHtml(line)}</li>`).join("")}</ul>` : "";
+  return body + list;
+}
+
+function sanitizeDescriptionHtml(value: unknown, fallback = "") {
+  const raw = String(value ?? "").trim() || String(fallback ?? "").trim();
+  const source = raw || "New item. Review the photos and selected option before checkout.";
+  let html = hasHtml(source) ? source : htmlFromPlainText(cleanText(source, fallback));
+  html = html
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<style[\s\S]*?<\/style>/gi, "")
+    .replace(/<(iframe|object|embed|form|input|button|meta|link)[\s\S]*?<\/\1>/gi, "")
+    .replace(/<\/?(iframe|object|embed|form|input|button|meta|link)[^>]*>/gi, "")
+    .replace(/\son[a-z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, "")
+    .replace(/(href|src)\s*=\s*(["'])\s*javascript:[\s\S]*?\2/gi, "$1=$2#$2")
+    .replace(/<img\b([^>]*)>/gi, (_match, attrs) => {
+      const src = String(attrs).match(/\ssrc\s*=\s*(["'])(.*?)\1/i)?.[2] || String(attrs).match(/\ssrc\s*=\s*([^\s>]+)/i)?.[1] || "";
+      if (!/^https?:\/\//i.test(src)) return "";
+      const alt = String(attrs).match(/\salt\s*=\s*(["'])(.*?)\1/i)?.[2] || "Product image";
+      return `<p><img src="${escapeHtml(src)}" alt="${escapeHtml(alt)}" style="max-width:100%;height:auto;border:0;display:block;margin:12px 0;" /></p>`;
+    })
+    .replace(/<(p|div|li|ul|ol|br|strong|b|em|span|table|tbody|thead|tr|td|th|h1|h2|h3|h4|h5|h6)(\s[^>]*)?>/gi, (tag) => tag)
+    .trim();
+  return `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.55;color:#111;">${html}</div>`;
+}
+
 function safeDescription(draft: any) {
   const bulletText = Array.isArray(draft.bullet_features) ? draft.bullet_features.join(". ") : "";
   const title = safeTitle(draft.title, draft.sku);
-  return cleanText(draft.description, `${title}. ${bulletText}. New item. Review photos and selected option before checkout.`) || title;
+  return sanitizeDescriptionHtml(draft.description, `${title}. ${bulletText}. New item. Review photos and selected option before checkout.`) || title;
 }
 
 function safeTitle(value: unknown, fallback: unknown) {
@@ -535,6 +621,13 @@ type DraftVariant = {
   quantity?: number;
 };
 
+type PublishVariantResult = {
+  sku: string;
+  ok: boolean;
+  error?: string;
+  offerId?: string | null;
+};
+
 function variantRowsFromDraft(draft: any): DraftVariant[] {
   const candidates = [draft?.variants, draft?.variant_group?.variants, draft?.profit?.variants, draft?.profit?.variant_group?.variants];
   for (const c of candidates) if (Array.isArray(c) && c.length > 1) return c;
@@ -651,30 +744,42 @@ async function publishVariantGroup(accessToken: string, draft: any, policies: an
   const baseImages = normalizeImageUrls(draft.images);
   const allImages = normalizeImageUrls(baseImages, variants.map((v) => v.variantImage || v.image));
   if (allImages.length === 0) throw new Error("eBay requires at least one valid http(s) image URL before publishing variants.");
-  const variantSKUs: string[] = [];
+  const successfulSKUs: string[] = [];
+  const variantResults: PublishVariantResult[] = [];
   const specifications = axes.map((axis) => ({ name: axis, values: Array.from(new Set(optionsByVariant.map((options) => options[axis]).filter(Boolean))).slice(0, 60) }));
   const imageAxis = axes.find((a) => /color|colour|style|pattern/i.test(a)) || axes[0];
 
   for (const [index, variant] of variants.entries()) {
-    const sku = cleanText(variant.variantSku || variant.sku || variant.vid || `${draft.sku}-${variantSKUs.length + 1}`).replace(/\s+/g, "-").slice(0, 50);
-    variantSKUs.push(sku);
-    const optionAspects = optionsByVariant[index];
-    const imageUrls = normalizeImageUrls(variant.variantImage, variant.image, baseImages, allImages);
-    const aspects = filterAspectsByCategory(normalizeAspects(draft.item_specifics, draft, optionAspects, axes), aspectCatalog);
-    for (const [k, v] of Object.entries(optionAspects)) if (v) aspects[k] = [String(v).slice(0, 65)];
-    await putInventoryItem(accessToken, sku, draft, imageUrls, aspects);
-    const variantPrice = priceNumber(variant.price ?? variant.variantSellPrice) || priceNumber(draft.price);
-    await createOrUpdateOffer(accessToken, stripEmpty({
-      sku,
-      marketplaceId: "EBAY_US",
-      format: "FIXED_PRICE",
-      availableQuantity: Number(variant.quantity || variant.inventory || draft.quantity || 1),
-      categoryId: draft.category_id,
-      merchantLocationKey,
-      listingDescription: safeDescription(draft),
-      listingPolicies: policies,
-      pricingSummary: { price: { value: String(Number(variantPrice || draft.price || 0).toFixed(2)), currency: "USD" } },
-    }));
+    const sku = cleanText(variant.variantSku || variant.sku || variant.vid || `${draft.sku}-${index + 1}`).replace(/\s+/g, "-").slice(0, 50);
+    try {
+      const optionAspects = optionsByVariant[index];
+      const imageUrls = normalizeImageUrls(variant.variantImage, variant.image, baseImages, allImages);
+      const aspects = filterAspectsByCategory(normalizeAspects(draft.item_specifics, draft, optionAspects, axes), aspectCatalog);
+      for (const [k, v] of Object.entries(optionAspects)) if (v) aspects[k] = [String(v).slice(0, 65)];
+      await putInventoryItem(accessToken, sku, draft, imageUrls, aspects);
+      const variantPrice = priceNumber(variant.price ?? variant.variantSellPrice) || priceNumber(draft.price);
+      const offerId = await createOrUpdateOffer(accessToken, stripEmpty({
+        sku,
+        marketplaceId: "EBAY_US",
+        format: "FIXED_PRICE",
+        availableQuantity: Number(variant.quantity || variant.inventory || draft.quantity || 1),
+        categoryId: draft.category_id,
+        merchantLocationKey,
+        listingDescription: safeDescription(draft),
+        listingPolicies: policies,
+        pricingSummary: { price: { value: String(Number(variantPrice || draft.price || 0).toFixed(2)), currency: "USD" } },
+      }));
+      successfulSKUs.push(sku);
+      variantResults.push({ sku, ok: true, offerId });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      variantResults.push({ sku, ok: false, error: message });
+    }
+  }
+
+  if (successfulSKUs.length !== variants.length) {
+    const failed = variantResults.filter((row) => !row.ok).map((row) => `${row.sku}: ${row.error}`).join(" | ");
+    throw new Error(`eBay variant preparation failed for ${variants.length - successfulSKUs.length}/${variants.length} variant(s). Nothing was marked pushed. ${failed}`);
   }
 
   const groupBody = {
@@ -682,7 +787,7 @@ async function publishVariantGroup(accessToken: string, draft: any, policies: an
     description: safeDescription(draft),
     aspects: filterAspectsByCategory(normalizeAspects(draft.item_specifics, draft, {}, axes), aspectCatalog, axes),
     imageUrls: allImages,
-    variantSKUs,
+    variantSKUs: successfulSKUs,
     variesBy: { aspectsImageVariesBy: imageAxis ? [imageAxis] : undefined, specifications },
   };
   const putGroup = async () => fetch(`${EBAY_API_BASE}/sell/inventory/v1/inventory_item_group/${encodeURIComponent(groupKey)}`, {
@@ -693,12 +798,28 @@ async function publishVariantGroup(accessToken: string, draft: any, policies: an
   let groupRes = await putGroup();
   if (!groupRes.ok) {
     const errText = await groupRes.text();
-    // 25703: "SKU is already a member of another group. groupId: XXX-grp" — delete that stale group and retry.
-    const conflicting = new Set<string>();
-    for (const m of errText.matchAll(/groupId:\s*([A-Za-z0-9_-]+)/g)) conflicting.add(m[1]);
-    for (const m of errText.matchAll(/"name":"text2","value":"([^"]+)"/g)) conflicting.add(m[1]);
+    // 25703: "SKU is already a member of another group". Remove the exact SKU from its old group, then retry this whole group.
+    const conflicts = new Map<string, Set<string>>();
+    const addConflict = (sku: string, group: string) => {
+      if (!sku || !group) return;
+      if (!conflicts.has(group)) conflicts.set(group, new Set());
+      conflicts.get(group)!.add(sku);
+    };
+    for (const m of errText.matchAll(/SKU:\s*([A-Za-z0-9_-]+)\s+groupId:\s*([A-Za-z0-9_-]+)/g)) addConflict(m[1], m[2]);
+    try {
+      const parsed = JSON.parse(errText);
+      for (const e of parsed?.errors || []) {
+        const params = e?.parameters || [];
+        const sku = params.find((p: any) => p?.name === "text1")?.value;
+        const group = params.find((p: any) => p?.name === "text2")?.value;
+        addConflict(String(sku || ""), String(group || ""));
+      }
+    } catch { /* use regex matches */ }
+    const conflicting = new Set(conflicts.keys());
     if (conflicting.size > 0) {
-      for (const key of conflicting) await deleteInventoryItemGroup(accessToken, key);
+      for (const [key, skus] of conflicts) {
+        for (const sku of skus) await removeSkuFromInventoryItemGroup(accessToken, key, sku);
+      }
       await deleteInventoryItemGroup(accessToken, groupKey);
       groupRes = await putGroup();
     }
@@ -712,7 +833,8 @@ async function publishVariantGroup(accessToken: string, draft: any, policies: an
   });
   const publishJson = await publish.json().catch(() => ({}));
   if (!publish.ok) throw new Error(`eBay variation publish failed: ${publishJson.errors?.[0]?.longMessage || publishJson.errors?.[0]?.message || publishJson.message || JSON.stringify(publishJson)}`);
-  return { offerId: null, listingId: publishJson.listingId, inventoryItemGroupKey: groupKey };
+  if (!publishJson.listingId) throw new Error(`eBay variation publish did not return a listing id. ${JSON.stringify(publishJson)}`);
+  return { offerId: null, listingId: publishJson.listingId, inventoryItemGroupKey: groupKey, variantCount: variants.length, variantSKUs: successfulSKUs, variantResults };
 }
 
 

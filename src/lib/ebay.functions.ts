@@ -141,7 +141,7 @@ async function autoRepairDraftFromCj(context: any, draft: any, reason: string) {
   const startCountry = compactCountry(draft.profit?.start_country || detail?.countryCode || detail?.countryFrom || detail?.sourceFrom, "CN");
   const warehouse = await resolveCjWarehouse(context, startCountry);
   const title = compactText(detail?.productNameEn, draft.title).slice(0, 80) || draft.title;
-  const description = compactText(detail?.description, draft.description || `${title}. New item. Review photos and selected option before checkout.`);
+  const description = String(detail?.description || draft.description || `${title}. New item. Review photos and selected option before checkout.`).trim();
   const images = cleanImages(draft.images, detail?.productImageSet, detail?.productImages, detail?.bigImage, detail?.productImage);
   const variants = repairVariants(detail, draft, images);
   const itemSpecifics: Record<string, string> = {
@@ -194,6 +194,11 @@ async function autoRepairDraftFromCj(context: any, draft: any, reason: string) {
 
 function shouldAutoRepair(message: string) {
   return /variation|specific|is\s+missing|invalid data|imageUrl|country|location|mpn|gtin|upc|volume\s+is\s+not\s+allowed|already a member of another group/i.test(message);
+}
+
+function draftVariantCount(draft: any) {
+  const variants = draft?.variants || draft?.variant_group?.variants || draft?.profit?.variants || draft?.profit?.variant_group?.variants || [];
+  return Array.isArray(variants) ? variants.length : 0;
 }
 
 
@@ -316,20 +321,27 @@ export const pushDraftsToEbay = createServerFn({ method: "POST" })
     for (const draft of drafts || []) {
       try {
         if (!draft.category_id) throw new Error("Missing eBay category");
+        // Always hydrate the full CJ variant group first; a chosen VID must not publish alone when the product has sibling variants.
+        let workingDraft = draft;
+        if (draft.cj_product_id && draftVariantCount(workingDraft) <= 1) {
+          try {
+            const repaired = await autoRepairDraftFromCj(context, workingDraft, "Refreshing full CJ variant group before eBay push");
+            if (draftVariantCount(repaired) > draftVariantCount(workingDraft)) workingDraft = repaired;
+          } catch { /* publish the existing draft if CJ refresh is unavailable */ }
+        }
         // Duplicate guard: refuse to push the same CJ product twice.
-        if (draft.cj_product_id) {
+        if (workingDraft.cj_product_id) {
           const { data: existing } = await context.supabase
             .from("ebay_listings")
             .select("id,ebay_item_id")
             .eq("user_id", context.userId)
-            .eq("cj_product_id", draft.cj_product_id)
+            .eq("cj_product_id", workingDraft.cj_product_id)
             .in("status", ["active", "pushed"])
             .limit(1)
             .maybeSingle();
           if (existing?.id) throw new Error(`Already listed on eBay (item ${existing.ebay_item_id || existing.id}). Skipping duplicate.`);
         }
         // Ensure start_country is set from CJ so inventory location is valid.
-        let workingDraft = draft;
         if (!draft.profit?.start_country) {
           try {
             const { cjProductDetail, getUserCjToken } = await import("./cj.server");
@@ -363,10 +375,15 @@ export const pushDraftsToEbay = createServerFn({ method: "POST" })
         }
         if (lastError) throw lastError;
 
-        await context.supabase.from("ebay_listings").insert({ user_id: context.userId, draft_id: draft.id, ebay_item_id: pushed.listingId, ebay_offer_id: pushed.offerId, sku: draft.sku, title: draft.title, price: draft.price, cj_product_id: draft.cj_product_id, status: "active", cj_landed_cost: Number((draft.profit || {}).item_cost || 0) + Number((draft.profit || {}).shipping || 0) });
+        const expectedVariants = draftVariantCount(workingDraft);
+        if (expectedVariants > 1 && (!pushed.listingId || Number(pushed.variantCount || 0) !== expectedVariants)) {
+          throw new Error(`eBay did not confirm all ${expectedVariants} variants were published. Nothing was marked pushed.`);
+        }
+
+        await context.supabase.from("ebay_listings").insert({ user_id: context.userId, draft_id: draft.id, ebay_item_id: pushed.listingId, ebay_offer_id: pushed.offerId, sku: workingDraft.sku, title: workingDraft.title, price: workingDraft.price, cj_product_id: workingDraft.cj_product_id, status: "active", cj_landed_cost: Number((workingDraft.profit || {}).item_cost || 0) + Number((workingDraft.profit || {}).shipping || 0) });
         // Auto-remove pushed draft from queue.
         await context.supabase.from("listing_drafts").delete().eq("id", draft.id);
-        await context.supabase.from("activity_logs").insert({ user_id: context.userId, level: "success", category: "ebay", message: `Pushed to eBay: ${draft.title}`, metadata: { draftId: draft.id, listingId: pushed.listingId, offerId: pushed.offerId } });
+        await context.supabase.from("activity_logs").insert({ user_id: context.userId, level: "success", category: "ebay", message: `Pushed to eBay: ${workingDraft.title}`, metadata: { draftId: draft.id, listingId: pushed.listingId, offerId: pushed.offerId, variants: expectedVariants || 1 } });
         results.push({ draftId: draft.id, ok: true, ...pushed });
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
