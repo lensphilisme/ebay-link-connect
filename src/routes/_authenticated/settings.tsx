@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { connectEbayWithCode, getEbayConnectUrl } from "@/lib/ebay.functions";
-import { saveCjToken, getIntegrationStatus } from "@/lib/cj.functions";
+import { saveCjApiKey, getIntegrationStatus } from "@/lib/cj.functions";
 import { supabase } from "@/integrations/supabase/client";
 import { KeyRound, Boxes, Tag, ExternalLink } from "lucide-react";
 import { useState, type ReactNode } from "react";
@@ -16,10 +16,11 @@ export const Route = createFileRoute("/_authenticated/settings")({ component: Se
 
 function SettingsPage() {
   const [code, setCode] = useState("");
-  const [cjToken, setCjToken] = useState("");
+  const [cjEmail, setCjEmail] = useState("");
+  const [cjApiKey, setCjApiKey] = useState("");
   const urlFn = useServerFn(getEbayConnectUrl);
   const connectFn = useServerFn(connectEbayWithCode);
-  const cjSaveFn = useServerFn(saveCjToken);
+  const cjSaveFn = useServerFn(saveCjApiKey);
   const statusFn = useServerFn(getIntegrationStatus);
 
   const { data: status, refetch } = useQuery({
@@ -40,8 +41,8 @@ function SettingsPage() {
     onError: (e: Error) => toast.error(e.message),
   });
   const saveCj = useMutation({
-    mutationFn: () => cjSaveFn({ data: { accessToken: cjToken } }),
-    onSuccess: () => { toast.success("CJ Dropshipping token saved"); setCjToken(""); refetch(); },
+    mutationFn: () => cjSaveFn({ data: { email: cjEmail || (status?.cj.email ?? ""), apiKey: cjApiKey } }),
+    onSuccess: () => { toast.success("CJ Dropshipping connected — tokens are now managed automatically"); setCjApiKey(""); refetch(); },
     onError: (e: Error) => toast.error(e.message),
   });
 
