@@ -87,6 +87,53 @@ function repairVariants(detail: any, draft: any, images: string[]) {
   };
 }
 
+// Reasonable defaults for aspects eBay commonly requires but CJ doesn't supply cleanly.
+const ASPECT_DEFAULTS: Record<string, string> = {
+  "Department": "Unisex Adult",
+  "Type": "General",
+  "Brand": "Unbranded",
+  "MPN": "Does Not Apply",
+  "Model": "Does Not Apply",
+  "Country/Region of Manufacture": "China",
+  "Upper Material": "Synthetic",
+  "Outer Material": "Synthetic",
+  "Material": "Synthetic",
+  "Style": "Casual",
+  "Color": "Multicolor",
+  "US Shoe Size": "10",
+  "Size": "One Size",
+  "Size Type": "Regular",
+  "Occasion": "Casual",
+  "Pattern": "Solid",
+  "Character": "None",
+  "Theme": "General",
+  "Season": "All Seasons",
+};
+
+function parseMissingAspects(message: string): string[] {
+  const names = new Set<string>();
+  for (const m of message.matchAll(/item specific ([A-Za-z0-9 /\-()]+?) is missing/gi)) names.add(m[1].trim());
+  for (const m of message.matchAll(/"name":"3","value":"([^"]+)"/g)) names.add(m[1].trim());
+  return Array.from(names);
+}
+
+function pickAspectFromCj(name: string, detail: any) {
+  const src = [
+    detail?.productProEnSet, detail?.productKeyEn, detail?.categoryName,
+    detail?.productType, detail?.productNameEn, detail?.brand,
+  ].filter(Boolean);
+  const hay = compactText(src.join(" | ")).toLowerCase();
+  if (/color|colour/i.test(name)) {
+    const m = hay.match(/\b(red|blue|black|white|green|yellow|pink|purple|gray|grey|brown|beige|gold|silver|orange|navy|multicolor)\b/);
+    if (m) return m[1].replace(/^\w/, (c) => c.toUpperCase());
+  }
+  if (/material/i.test(name)) {
+    const m = hay.match(/\b(cotton|silicone|leather|plastic|silk|linen|wool|polyester|nylon|rubber|metal|wood|glass|synthetic|canvas|denim|mesh|suede)\b/);
+    if (m) return m[1].replace(/^\w/, (c) => c.toUpperCase());
+  }
+  return null;
+}
+
 async function autoRepairDraftFromCj(context: any, draft: any, reason: string) {
   const { cjProductDetail, getUserCjToken } = await import("./cj.server");
   const token = await getUserCjToken(context.supabase, context.userId);
@@ -97,13 +144,19 @@ async function autoRepairDraftFromCj(context: any, draft: any, reason: string) {
   const description = compactText(detail?.description, draft.description || `${title}. New item. Review photos and selected option before checkout.`);
   const images = cleanImages(draft.images, detail?.productImageSet, detail?.productImages, detail?.bigImage, detail?.productImage);
   const variants = repairVariants(detail, draft, images);
-  const itemSpecifics = {
+  const itemSpecifics: Record<string, string> = {
     ...(draft.item_specifics || {}),
     Brand: compactText(draft.brand || draft.item_specifics?.Brand || detail?.brand, "Unbranded"),
     Type: compactText(draft.item_specifics?.Type, inferType(title, detail, draft)),
     Model: compactText(draft.model || draft.item_specifics?.Model, "Does Not Apply"),
     MPN: compactText(draft.item_specifics?.MPN, "Does Not Apply"),
   };
+  // Inject explicit values for whatever eBay complained was missing.
+  for (const name of parseMissingAspects(reason)) {
+    if (itemSpecifics[name]) continue;
+    const fromCj = pickAspectFromCj(name, detail);
+    itemSpecifics[name] = fromCj || ASPECT_DEFAULTS[name] || "Does Not Apply";
+  }
   const repaired = {
     ...draft,
     title,
@@ -140,8 +193,10 @@ async function autoRepairDraftFromCj(context: any, draft: any, reason: string) {
 }
 
 function shouldAutoRepair(message: string) {
-  return /variation|specific|type\s+is\s+missing|invalid data|imageUrl|country|location|mpn|gtin|upc/i.test(message);
+  return /variation|specific|is\s+missing|invalid data|imageUrl|country|location|mpn|gtin|upc|volume\s+is\s+not\s+allowed|already a member of another group/i.test(message);
 }
+
+
 
 export const getEbayConnectUrl = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
