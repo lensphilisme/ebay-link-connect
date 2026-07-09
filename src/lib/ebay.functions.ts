@@ -1,6 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
-import { ebayConsentUrl, exchangeEbayCode, fetchActiveEbayListings, getCategorySuggestions, getEbayCategoryTreeShallow, getFreshEbayToken, publishInventoryItem, reviseEbayListingText, endEbayFixedPriceListing } from "./ebay.server";
+import { ebayConsentUrl, exchangeEbayCode, fetchActiveEbayListings, fetchItemImagesShopping, getCategorySuggestions, getEbayCategoryTreeShallow, getFreshEbayToken, publishInventoryItem, reviseEbayListingText, endEbayFixedPriceListing } from "./ebay.server";
 
 function cleanTitle(value: unknown) {
   return String(value ?? "")
@@ -87,6 +87,53 @@ function repairVariants(detail: any, draft: any, images: string[]) {
   };
 }
 
+// Reasonable defaults for aspects eBay commonly requires but CJ doesn't supply cleanly.
+const ASPECT_DEFAULTS: Record<string, string> = {
+  "Department": "Unisex Adult",
+  "Type": "General",
+  "Brand": "Unbranded",
+  "MPN": "Does Not Apply",
+  "Model": "Does Not Apply",
+  "Country/Region of Manufacture": "China",
+  "Upper Material": "Synthetic",
+  "Outer Material": "Synthetic",
+  "Material": "Synthetic",
+  "Style": "Casual",
+  "Color": "Multicolor",
+  "US Shoe Size": "10",
+  "Size": "One Size",
+  "Size Type": "Regular",
+  "Occasion": "Casual",
+  "Pattern": "Solid",
+  "Character": "None",
+  "Theme": "General",
+  "Season": "All Seasons",
+};
+
+function parseMissingAspects(message: string): string[] {
+  const names = new Set<string>();
+  for (const m of message.matchAll(/item specific ([A-Za-z0-9 /\-()]+?) is missing/gi)) names.add(m[1].trim());
+  for (const m of message.matchAll(/"name":"3","value":"([^"]+)"/g)) names.add(m[1].trim());
+  return Array.from(names);
+}
+
+function pickAspectFromCj(name: string, detail: any) {
+  const src = [
+    detail?.productProEnSet, detail?.productKeyEn, detail?.categoryName,
+    detail?.productType, detail?.productNameEn, detail?.brand,
+  ].filter(Boolean);
+  const hay = compactText(src.join(" | ")).toLowerCase();
+  if (/color|colour/i.test(name)) {
+    const m = hay.match(/\b(red|blue|black|white|green|yellow|pink|purple|gray|grey|brown|beige|gold|silver|orange|navy|multicolor)\b/);
+    if (m) return m[1].replace(/^\w/, (c) => c.toUpperCase());
+  }
+  if (/material/i.test(name)) {
+    const m = hay.match(/\b(cotton|silicone|leather|plastic|silk|linen|wool|polyester|nylon|rubber|metal|wood|glass|synthetic|canvas|denim|mesh|suede)\b/);
+    if (m) return m[1].replace(/^\w/, (c) => c.toUpperCase());
+  }
+  return null;
+}
+
 async function autoRepairDraftFromCj(context: any, draft: any, reason: string) {
   const { cjProductDetail, getUserCjToken } = await import("./cj.server");
   const token = await getUserCjToken(context.supabase, context.userId);
@@ -97,13 +144,19 @@ async function autoRepairDraftFromCj(context: any, draft: any, reason: string) {
   const description = compactText(detail?.description, draft.description || `${title}. New item. Review photos and selected option before checkout.`);
   const images = cleanImages(draft.images, detail?.productImageSet, detail?.productImages, detail?.bigImage, detail?.productImage);
   const variants = repairVariants(detail, draft, images);
-  const itemSpecifics = {
+  const itemSpecifics: Record<string, string> = {
     ...(draft.item_specifics || {}),
     Brand: compactText(draft.brand || draft.item_specifics?.Brand || detail?.brand, "Unbranded"),
     Type: compactText(draft.item_specifics?.Type, inferType(title, detail, draft)),
     Model: compactText(draft.model || draft.item_specifics?.Model, "Does Not Apply"),
     MPN: compactText(draft.item_specifics?.MPN, "Does Not Apply"),
   };
+  // Inject explicit values for whatever eBay complained was missing.
+  for (const name of parseMissingAspects(reason)) {
+    if (itemSpecifics[name]) continue;
+    const fromCj = pickAspectFromCj(name, detail);
+    itemSpecifics[name] = fromCj || ASPECT_DEFAULTS[name] || "Does Not Apply";
+  }
   const repaired = {
     ...draft,
     title,
@@ -140,8 +193,10 @@ async function autoRepairDraftFromCj(context: any, draft: any, reason: string) {
 }
 
 function shouldAutoRepair(message: string) {
-  return /variation|specific|type\s+is\s+missing|invalid data|imageUrl|country|location|mpn|gtin|upc/i.test(message);
+  return /variation|specific|is\s+missing|invalid data|imageUrl|country|location|mpn|gtin|upc|volume\s+is\s+not\s+allowed|already a member of another group/i.test(message);
 }
+
+
 
 export const getEbayConnectUrl = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
@@ -174,44 +229,73 @@ export const syncEbayListings = createServerFn({ method: "POST" })
     const token = await getFreshEbayToken(context.supabase, context.userId);
     const perPage = data.entriesPerPage ?? 200;
     let page = 1;
-    let totalSynced = 0;
     let grandTotal = 0;
-    // eBay caps GetMyeBaySelling at 200 per page; walk until we've covered TotalNumberOfEntries.
+    // Dedupe items across pages by ebay_item_id (eBay pagination can overlap).
+    const seen = new Map<string, any>();
     while (true) {
       const result = await fetchActiveEbayListings(token, page, perPage);
       grandTotal = result.total;
       for (const item of result.items) {
-        const row = {
-          user_id: context.userId,
-          ebay_item_id: item.itemId,
-          sku: item.sku,
-          title: item.title,
-          price: item.price,
-          currency: item.currency,
-          marketplace_id: "EBAY_US",
-          status: "active",
-          sales: item.quantitySold,
-          views: item.watchCount,
-          image_url: item.imageUrl || null,
-          listed_at: item.listedAt || undefined,
-        };
-        const { data: existingRows } = await context.supabase.from("ebay_listings").select("id").eq("user_id", context.userId).eq("ebay_item_id", item.itemId).limit(10);
-        const existing = existingRows?.[0];
-        if (existing?.id) {
-          await context.supabase.from("ebay_listings").update(row).eq("id", existing.id);
-          const duplicateIds = (existingRows || []).slice(1).map((r: any) => r.id);
-          if (duplicateIds.length) await context.supabase.from("ebay_listings").delete().in("id", duplicateIds);
-        }
-        else await context.supabase.from("ebay_listings").insert(row);
+        if (!item.itemId) continue;
+        if (!seen.has(item.itemId)) seen.set(item.itemId, item);
       }
-      totalSynced += result.items.length;
-      if (result.items.length < perPage || totalSynced >= grandTotal) break;
+      if (result.items.length < perPage || seen.size >= grandTotal) break;
       page += 1;
       if (page > 50) break; // safety cap ~10k listings
     }
-    await context.supabase.from("activity_logs").insert({ user_id: context.userId, level: "success", category: "ebay", message: `Synced ${totalSynced} of ${grandTotal} active eBay listings`, metadata: { total: grandTotal, synced: totalSynced } });
-    return { total: grandTotal, synced: totalSynced };
+    const uniqueItems = Array.from(seen.values());
+    // Enrich thumbnails via public Shopping API (GetMyeBaySelling doesn't return them).
+    const missingImgIds = uniqueItems.filter((i) => !i.imageUrl).map((i) => i.itemId);
+    if (missingImgIds.length) {
+      try {
+        const imgMap = await fetchItemImagesShopping(missingImgIds);
+        for (const it of uniqueItems) if (!it.imageUrl && imgMap[it.itemId]) it.imageUrl = imgMap[it.itemId];
+      } catch { /* best effort */ }
+    }
+    // Upsert every unique active item.
+    for (const item of uniqueItems) {
+      const row = {
+        user_id: context.userId,
+        ebay_item_id: item.itemId,
+        sku: item.sku,
+        title: item.title,
+        price: item.price,
+        currency: item.currency,
+        marketplace_id: "EBAY_US",
+        status: "active",
+        sales: item.quantitySold,
+        views: item.watchCount,
+        image_url: item.imageUrl || null,
+        listed_at: item.listedAt || undefined,
+      };
+      const { data: existingRows } = await context.supabase.from("ebay_listings").select("id").eq("user_id", context.userId).eq("ebay_item_id", item.itemId).limit(10);
+      const existing = existingRows?.[0];
+      if (existing?.id) {
+        await context.supabase.from("ebay_listings").update(row).eq("id", existing.id);
+        const duplicateIds = (existingRows || []).slice(1).map((r: any) => r.id);
+        if (duplicateIds.length) await context.supabase.from("ebay_listings").delete().in("id", duplicateIds);
+      } else await context.supabase.from("ebay_listings").insert(row);
+    }
+    // Prune stale: mark rows as 'ended' when they're no longer in eBay's active set.
+    const seenIds = Array.from(seen.keys());
+    let pruned = 0;
+    if (seenIds.length > 0) {
+      const { data: stale } = await context.supabase
+        .from("ebay_listings")
+        .select("id,ebay_item_id")
+        .eq("user_id", context.userId)
+        .eq("status", "active")
+        .not("ebay_item_id", "in", `(${seenIds.map((v) => `"${v}"`).join(",")})`);
+      pruned = stale?.length || 0;
+      if (pruned > 0) {
+        await context.supabase.from("ebay_listings").delete().in("id", (stale || []).map((r: any) => r.id));
+      }
+    }
+    const synced = uniqueItems.length;
+    await context.supabase.from("activity_logs").insert({ user_id: context.userId, level: "success", category: "ebay", message: `Synced ${synced} active eBay listings (removed ${pruned} stale)`, metadata: { total: grandTotal, synced, pruned } });
+    return { total: grandTotal, synced, pruned };
   });
+
 
 export const suggestEbayCategories = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
@@ -264,14 +348,21 @@ export const pushDraftsToEbay = createServerFn({ method: "POST" })
           }
         }
         let pushed: any;
-        try {
-          pushed = await publishInventoryItem(token, workingDraft);
-        } catch (firstError) {
-          const firstMessage = firstError instanceof Error ? firstError.message : String(firstError);
-          if (!draft.cj_product_id || !shouldAutoRepair(firstMessage)) throw firstError;
-          workingDraft = await autoRepairDraftFromCj(context, workingDraft, firstMessage);
-          pushed = await publishInventoryItem(token, workingDraft);
+        let lastError: unknown = null;
+        for (let attempt = 0; attempt < 4; attempt++) {
+          try {
+            pushed = await publishInventoryItem(token, workingDraft);
+            lastError = null;
+            break;
+          } catch (err) {
+            lastError = err;
+            const message = err instanceof Error ? err.message : String(err);
+            if (!draft.cj_product_id || !shouldAutoRepair(message) || attempt === 3) throw err;
+            workingDraft = await autoRepairDraftFromCj(context, workingDraft, message);
+          }
         }
+        if (lastError) throw lastError;
+
         await context.supabase.from("ebay_listings").insert({ user_id: context.userId, draft_id: draft.id, ebay_item_id: pushed.listingId, ebay_offer_id: pushed.offerId, sku: draft.sku, title: draft.title, price: draft.price, cj_product_id: draft.cj_product_id, status: "active", cj_landed_cost: Number((draft.profit || {}).item_cost || 0) + Number((draft.profit || {}).shipping || 0) });
         // Auto-remove pushed draft from queue.
         await context.supabase.from("listing_drafts").delete().eq("id", draft.id);
