@@ -20,7 +20,7 @@ function stripDangerousHtml(value: unknown) {
 function htmlDescription(value: unknown, fallbackValue: unknown) {
   const raw = stripDangerousHtml(value) || stripDangerousHtml(fallbackValue);
   if (/<(p|div|br|ul|ol|li|img|strong|b|em|h[1-6])\b/i.test(raw)) return raw;
-  const text = cleanText(raw, fallbackValue);
+  const text = cleanText(raw, String(fallbackValue ?? ""));
   const pieces = text.split(/(?<=[.!?])\s+(?=[A-Z0-9])/).map((part) => part.trim()).filter(Boolean).slice(0, 10);
   return pieces.map((part, index) => index === 0 ? `<p><strong>${part}</strong></p>` : `<p>${part}</p>`).join("<br>");
 }
