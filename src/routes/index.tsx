@@ -1,5 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { ArrowRight, Boxes, Gauge, LineChart, ShieldCheck, Sparkles, Zap } from "lucide-react";
+import { ArrowRight, Sparkles } from "lucide-react";
 import { BrandLogo } from "@/components/brand-logo";
 import { Button } from "@/components/ui/button";
 
@@ -7,9 +7,9 @@ export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
       { title: "DropList — Bulk-list CJ Dropshipping products to eBay" },
-      { name: "description", content: "Find winning CJ Dropshipping products, build optimized eBay drafts, and bulk-push to your eBay account with smart pricing and market research." },
+      { name: "description", content: "Find winning CJ Dropshipping products, build optimized eBay drafts and bulk-push to your eBay account." },
       { property: "og:title", content: "DropList — Bulk-list CJ Dropshipping products to eBay" },
-      { property: "og:description", content: "Find winning CJ Dropshipping products, build optimized eBay drafts, and bulk-push to your eBay account with smart pricing and market research." },
+      { property: "og:description", content: "Find winning CJ Dropshipping products, build optimized eBay drafts and bulk-push to your eBay account." },
     ],
   }),
   component: Landing,
@@ -17,108 +17,49 @@ export const Route = createFileRoute("/")({
 
 function Landing() {
   return (
-    <div className="min-h-screen bg-background">
-      <header className="border-b border-border bg-card/60 backdrop-blur sticky top-0 z-30">
-        <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
-          <Link to="/"><BrandLogo /></Link>
-          <nav className="flex items-center gap-2">
-            <Button asChild variant="ghost"><Link to="/auth">Sign in</Link></Button>
-            <Button asChild><Link to="/auth">Get started</Link></Button>
-          </nav>
-        </div>
+    <div className="relative h-screen w-full overflow-hidden bg-background flex flex-col">
+      {/* animated color blobs */}
+      <div className="pointer-events-none absolute inset-0 -z-10">
+        <div className="blob" style={{ background: "var(--brand-blue)", width: 380, height: 380, top: -80, left: -80 }} />
+        <div className="blob" style={{ background: "var(--brand-red)", width: 300, height: 300, bottom: -60, right: -40, animationDelay: "2s" }} />
+        <div className="blob" style={{ background: "var(--brand-yellow)", width: 260, height: 260, top: "40%", right: "20%", animationDelay: "4s" }} />
+        <div className="blob" style={{ background: "var(--brand-green)", width: 220, height: 220, bottom: "10%", left: "10%", animationDelay: "6s" }} />
+      </div>
+
+      <header className="shrink-0 px-5 sm:px-8 h-14 flex items-center justify-between">
+        <Link to="/"><BrandLogo size="sm" /></Link>
+        <Button asChild size="sm" variant="ghost" className="text-xs">
+          <Link to="/auth">Sign in</Link>
+        </Button>
       </header>
 
-      <section className="relative overflow-hidden" style={{ background: "var(--gradient-hero)" }}>
-        <div className="max-w-7xl mx-auto px-6 py-20 lg:py-28 grid lg:grid-cols-2 gap-12 items-center">
-          <div>
-            <div className="inline-flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1 text-xs font-medium text-muted-foreground mb-6">
-              <Sparkles className="h-3.5 w-3.5 text-[var(--brand-blue)]" />
-              CJ Dropshipping → eBay, automated
-            </div>
-            <h1 className="text-4xl lg:text-6xl font-extrabold tracking-tight leading-[1.05]">
-              List smarter on eBay.
-              <span className="block text-transparent bg-clip-text" style={{ backgroundImage: "var(--gradient-brand)" }}>
-                Sell faster.
-              </span>
-            </h1>
-            <p className="mt-6 text-lg text-muted-foreground max-w-xl">
-              DropList fetches CJ Dropshipping products, builds eBay-ready drafts with smart pricing
-              and real market research, then bulk-pushes them to your eBay account — and keeps
-              optimizing after they go live.
-            </p>
-            <div className="mt-8 flex flex-wrap gap-3">
-              <Button asChild size="lg" className="gap-2">
-                <Link to="/auth">Start listing <ArrowRight className="h-4 w-4" /></Link>
-              </Button>
-              <Button asChild size="lg" variant="outline">
-                <Link to="/auth">Sign in</Link>
-              </Button>
-            </div>
-            <div className="mt-8 flex items-center gap-6 text-xs text-muted-foreground">
-              <span className="flex items-center gap-1.5"><ShieldCheck className="h-4 w-4 text-[var(--brand-green)]" /> Your credentials stay encrypted, server-side</span>
-            </div>
-          </div>
-
-          <div className="relative">
-            <div className="rounded-2xl border border-border bg-card p-6 shadow-[var(--shadow-elevated)]">
-              <div className="flex items-center justify-between mb-4">
-                <div className="text-sm font-semibold">Bulk draft preview</div>
-                <span className="text-xs rounded-full bg-success/10 text-success px-2 py-0.5 font-medium">12 ready</span>
-              </div>
-              <div className="space-y-3">
-                {[
-                  { t: "Wireless Earbuds Pro X", p: "$24.99", m: "+38%" },
-                  { t: "LED Strip Lights 32ft RGB", p: "$15.49", m: "+42%" },
-                  { t: "Pet Grooming Vacuum Kit", p: "$59.99", m: "+31%" },
-                ].map((r) => (
-                  <div key={r.t} className="flex items-center justify-between rounded-lg border border-border px-4 py-3">
-                    <div>
-                      <div className="text-sm font-medium">{r.t}</div>
-                      <div className="text-xs text-muted-foreground">CJ → eBay US · Active rule set</div>
-                    </div>
-                    <div className="text-right">
-                      <div className="text-sm font-semibold">{r.p}</div>
-                      <div className="text-xs text-success">{r.m}</div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
+      <main className="flex-1 min-h-0 flex flex-col items-center justify-center text-center px-6 rise">
+        <div className="inline-flex items-center gap-2 rounded-full border border-border bg-card/70 backdrop-blur px-3 py-1 text-[11px] font-medium text-muted-foreground mb-5">
+          <Sparkles className="h-3.5 w-3.5 text-[var(--brand-blue)]" />
+          CJ Dropshipping → eBay, automated
         </div>
-      </section>
 
-      <section className="max-w-7xl mx-auto px-6 py-20 grid md:grid-cols-3 gap-6">
-        {[
-          { Icon: Boxes, t: "Fetch CJ inventory", d: "Search CJ Dropshipping by category, country, price, weight, ratings — cache only the winners." },
-          { Icon: Zap, t: "Bulk-list to eBay", d: "Generate optimized drafts, approve in one click, push to your eBay account via the Inventory API." },
-          { Icon: LineChart, t: "Optimize after launch", d: "Track views, clicks, sales and CJ stock; the optimizer recommends rewrites, price moves, or end." },
-        ].map(({ Icon, t, d }) => (
-          <div key={t} className="rounded-2xl border border-border bg-card p-6 shadow-[var(--shadow-card)]">
-            <div className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary"><Icon className="h-5 w-5" /></div>
-            <h3 className="mt-4 font-semibold text-lg">{t}</h3>
-            <p className="mt-2 text-sm text-muted-foreground">{d}</p>
-          </div>
-        ))}
-      </section>
+        <h1 className="font-display font-black tracking-tight leading-[0.95] text-[clamp(2.5rem,11vw,5.5rem)] max-w-4xl">
+          List smarter.
+          <span className="block animated-gradient">Sell faster.</span>
+        </h1>
 
-      <section className="border-t border-border bg-secondary/40">
-        <div className="max-w-7xl mx-auto px-6 py-16 flex flex-col items-center text-center gap-6">
-          <Gauge className="h-10 w-10 text-primary" />
-          <h2 className="text-3xl font-bold tracking-tight">Built for safe, profitable bulk listing.</h2>
-          <p className="max-w-2xl text-muted-foreground">
-            Pricing respects min profit, fee buffers, and rounded ladders. Drafts run duplicate checks
-            against your active listings. Live pushes are off until you flip the safety switch.
-          </p>
-          <Button asChild size="lg"><Link to="/auth">Create your workspace</Link></Button>
+        <p className="mt-5 text-sm sm:text-base text-muted-foreground max-w-md">
+          Bulk-push winning products from CJ to eBay in one click.
+        </p>
+
+        <div className="mt-7 flex flex-wrap gap-3 justify-center">
+          <Button asChild size="lg" className="gap-2 shadow-[var(--shadow-elevated)]">
+            <Link to="/auth">Start listing <ArrowRight className="h-4 w-4" /></Link>
+          </Button>
+          <Button asChild size="lg" variant="outline" className="backdrop-blur bg-card/60">
+            <Link to="/auth">Sign in</Link>
+          </Button>
         </div>
-      </section>
+      </main>
 
-      <footer className="border-t border-border">
-        <div className="max-w-7xl mx-auto px-6 py-8 flex flex-wrap items-center justify-between gap-4 text-sm text-muted-foreground">
-          <BrandLogo size="sm" />
-          <span>© {new Date().getFullYear()} DropList. Not affiliated with eBay or CJ Dropshipping.</span>
-        </div>
+      <footer className="shrink-0 px-6 py-3 text-center text-[11px] text-muted-foreground">
+        © {new Date().getFullYear()} DropList
       </footer>
     </div>
   );
