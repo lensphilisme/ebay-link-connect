@@ -8,6 +8,23 @@ function cleanText(value: unknown, fallback = "") {
   return normalize(value) || normalize(fallback);
 }
 
+function stripDangerousHtml(value: unknown) {
+  return String(value ?? "")
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<style[\s\S]*?<\/style>/gi, "")
+    .replace(/<\/?(iframe|object|embed|form|input|button|meta|link)[^>]*>/gi, "")
+    .replace(/\son[a-z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, "")
+    .trim();
+}
+
+function htmlDescription(value: unknown, fallbackValue: unknown) {
+  const raw = stripDangerousHtml(value) || stripDangerousHtml(fallbackValue);
+  if (/<(p|div|br|ul|ol|li|img|strong|b|em|h[1-6])\b/i.test(raw)) return raw;
+  const text = cleanText(raw, fallbackValue);
+  const pieces = text.split(/(?<=[.!?])\s+(?=[A-Z0-9])/).map((part) => part.trim()).filter(Boolean).slice(0, 10);
+  return pieces.map((part, index) => index === 0 ? `<p><strong>${part}</strong></p>` : `<p>${part}</p>`).join("<br>");
+}
+
 function flattenImageInput(input: unknown): unknown[] {
   if (!input) return [];
   if (Array.isArray(input)) return input.flatMap(flattenImageInput);
@@ -143,7 +160,7 @@ function fallback(title: string, description = "") {
   if (text.includes("led")) specifics.Lighting = "LED";
   if (text.includes("cotton")) specifics.Material = "Cotton";
   const bullets = cleanTitle.split(/[,.|-]/).slice(0, 5).map((s) => s.trim()).filter(Boolean);
-  const rewritten = `${cleanTitle}\n\n${bullets.map((b) => `• ${b}`).join("\n")}\n\nShips from vetted fulfillment partners. Please review the photos and selected option before checkout.`;
+  const rewritten = `<p><strong>${cleanTitle}</strong></p><ul>${bullets.map((b) => `<li>${b}</li>`).join("")}</ul><p>Ships from vetted fulfillment partners. Please review the photos and selected option before checkout.</p>`;
   return { title: cleanTitle.slice(0, 80), description: rewritten, bullet_features: bullets, item_specifics: specifics, brand: "Unbranded", model: "Does not apply" };
 }
 
@@ -206,7 +223,7 @@ export const optimizeDraftCopyWithAi = createServerFn({ method: "POST" })
             model: "openai/gpt-5.5",
             response_format: { type: "json_object" },
             messages: [
-              { role: "system", content: "You are eBay AI Optimized. Return strict JSON with title, description, and bullet_features only. Optimize the eBay title to 80 characters or less, write buyer-focused SEO description copy, improve keywords and formatting. Do not generate item_specifics and do not generate item location." },
+              { role: "system", content: "You are eBay AI Optimized. Return strict JSON with title, description, and bullet_features only. Optimize the eBay title to 80 characters or less. Preserve any existing useful HTML images exactly as <img src=...>. Return description as clean eBay-safe HTML using <p>, <br>, <strong>, and <ul><li> so text is readable and not one long line. Do not generate item_specifics and do not generate item location." },
               { role: "user", content: JSON.stringify({ title: draft.title, description: draft.description, bullet_features: draft.bullet_features, item_specifics: draft.item_specifics, sku: draft.sku }) },
             ],
           }),
@@ -217,7 +234,7 @@ export const optimizeDraftCopyWithAi = createServerFn({ method: "POST" })
     }
     const update = {
       title: cleanText(out.title, draft.title).slice(0, 80),
-      description: cleanText(out.description, fallback(draft.title, draft.description).description),
+      description: htmlDescription(out.description, draft.description || fallback(draft.title, draft.description).description),
       bullet_features: Array.isArray(out.bullet_features) ? out.bullet_features.map((b: unknown) => shortAspect("Features", b)).filter(Boolean).slice(0, 8) : [],
     };
     await context.supabase.from("listing_drafts").update(update).eq("id", draft.id);
@@ -240,7 +257,7 @@ export const repairDraftForEbay = createServerFn({ method: "POST" })
     }
 
     const titleSource = cjDetail?.productNameEn || draft.title || draft.sku;
-    const descriptionSource = cleanText(cjDetail?.description, draft.description);
+    const descriptionSource = stripDangerousHtml(cjDetail?.description || draft.description);
     const baseImages = cleanImages(draft.images, cjDetail?.productImageSet, cjDetail?.productImages, cjDetail?.bigImage, cjDetail?.productImage);
     const axes = variantAxes(cjDetail?.productKeyEn || draft.profit?.product_key, (cjDetail?.variants || cjDetail?.variantList || cjDetail?.productVariants || draft.profit?.variant_group?.variants || [])[0]);
     const variants = variantRows(cjDetail, draft, baseImages);
@@ -255,7 +272,7 @@ export const repairDraftForEbay = createServerFn({ method: "POST" })
             model: "google/gemini-3-flash-preview",
             response_format: { type: "json_object" },
             messages: [
-              { role: "system", content: "Repair CJ Dropshipping product data for eBay Inventory API. Return strict JSON: title, description, bullet_features array, item_specifics object, brand, model. Rules: title <=80 chars, description plain text not empty, every item specific value <=65 chars, no duplicate variation axes in item_specifics, no unsupported brands/certifications/compatibility." },
+              { role: "system", content: "Repair CJ Dropshipping product data for eBay Inventory API. Return strict JSON: title, description, bullet_features array, item_specifics object, brand, model. Rules: title <=80 chars, description must be eBay-safe HTML, preserve useful <img src=...> tags from source, improve layout with <p>, <br>, <strong>, and <ul><li>, every item specific value <=65 chars, no duplicate variation axes in item_specifics, no unsupported brands/certifications/compatibility." },
               { role: "user", content: JSON.stringify({ title: titleSource, description: descriptionSource, existing_specifics: draft.item_specifics, variation_axes: axes, category_id: draft.category_id, error: draft.audit_reason }) },
             ],
           }),
@@ -267,7 +284,7 @@ export const repairDraftForEbay = createServerFn({ method: "POST" })
 
     const fallbackOut = fallback(titleSource, descriptionSource);
     const title = cleanText(aiOut.title, titleSource).slice(0, 80) || fallbackOut.title;
-    const description = cleanText(aiOut.description, descriptionSource) || fallbackOut.description;
+    const description = htmlDescription(aiOut.description, descriptionSource || fallbackOut.description);
     const bulletFeatures = (Array.isArray(aiOut.bullet_features) ? aiOut.bullet_features : fallbackOut.bullet_features)
       .map((b: unknown) => shortAspect("Features", b))
       .filter(Boolean)
