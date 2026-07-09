@@ -824,9 +824,9 @@ async function publishVariantGroup(accessToken: string, draft: any, policies: an
     body: JSON.stringify(groupBody),
   });
   let groupRes = await putGroup();
-  if (!groupRes.ok) {
+  for (let attempt = 0; attempt < 4 && !groupRes.ok; attempt++) {
     const errText = await groupRes.text();
-    // 25703: "SKU is already a member of another group". Remove the exact SKU from its old group, then retry this whole group.
+    // 25703: "SKU is already a member of another group". Parse ALL conflicts and free them.
     const conflicts = new Map<string, Set<string>>();
     const addConflict = (sku: string, group: string) => {
       if (!sku || !group) return;
@@ -843,16 +843,19 @@ async function publishVariantGroup(accessToken: string, draft: any, policies: an
         addConflict(String(sku || ""), String(group || ""));
       }
     } catch { /* use regex matches */ }
-    const conflicting = new Set(conflicts.keys());
-    if (conflicting.size > 0) {
-      for (const [key, skus] of conflicts) {
-        for (const sku of skus) await removeSkuFromInventoryItemGroup(accessToken, key, sku);
-      }
-      await deleteInventoryItemGroup(accessToken, groupKey);
-      groupRes = await putGroup();
+    if (conflicts.size === 0) {
+      throw new Error(`eBay variation group failed: ${errText}`);
     }
-    if (!groupRes.ok) throw new Error(`eBay variation group failed: ${await groupRes.text()}`);
+    for (const [key, skus] of conflicts) {
+      for (const sku of skus) await removeSkuFromInventoryItemGroup(accessToken, key, sku);
+      if (key !== groupKey) await deleteInventoryItemGroup(accessToken, key);
+    }
+    // Also proactively free every one of our variant SKUs from our own stale group (if any).
+    await deleteInventoryItemGroup(accessToken, groupKey);
+    groupRes = await putGroup();
   }
+  if (!groupRes.ok) throw new Error(`eBay variation group failed after conflict repair: ${await groupRes.text()}`);
+
 
   const publish = await fetch(`${EBAY_API_BASE}/sell/inventory/v1/offer/publish_by_inventory_item_group`, {
     method: "POST",
