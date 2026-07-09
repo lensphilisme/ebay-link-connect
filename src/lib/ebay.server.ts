@@ -161,6 +161,39 @@ export async function fetchActiveEbayListings(accessToken: string, pageNumber = 
   return { total, items };
 }
 
+// Public Shopping API — batch (max 20) GetMultipleItems to fetch gallery images.
+// Used to enrich sync rows because GetMyeBaySelling ActiveList doesn't return picture data.
+export async function fetchItemImagesShopping(itemIds: string[]): Promise<Record<string, string>> {
+  const map: Record<string, string> = {};
+  const appId = process.env.EBAY_CLIENT_ID;
+  if (!appId || itemIds.length === 0) return map;
+  const chunks: string[][] = [];
+  for (let i = 0; i < itemIds.length; i += 20) chunks.push(itemIds.slice(i, i + 20));
+  for (const chunk of chunks) {
+    try {
+      const url = `https://open.api.ebay.com/shopping?callname=GetMultipleItems&responseencoding=JSON&appid=${encodeURIComponent(appId)}&version=967&siteid=0&ItemID=${chunk.join(",")}&IncludeSelector=Details`;
+      const res = await fetch(url);
+      const json: any = await res.json().catch(() => ({}));
+      for (const item of json?.Item || []) {
+        const pics = item?.PictureURL;
+        const img = (Array.isArray(pics) ? pics[0] : pics) || item?.GalleryURL;
+        if (item?.ItemID && img) map[String(item.ItemID)] = String(img);
+      }
+    } catch { /* best effort */ }
+  }
+  return map;
+}
+
+export async function deleteInventoryItemGroup(accessToken: string, groupKey: string) {
+  try {
+    await fetch(`${EBAY_API_BASE}/sell/inventory/v1/inventory_item_group/${encodeURIComponent(groupKey)}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+  } catch { /* ignore */ }
+}
+
+
 export async function getCategorySuggestions(accessToken: string, q: string, marketplaceId = "EBAY_US") {
   const treeRes = await fetch(`${EBAY_API_BASE}/commerce/taxonomy/v1/get_default_category_tree_id?marketplace_id=${marketplaceId}`, {
     headers: { Authorization: `Bearer ${accessToken}` },
