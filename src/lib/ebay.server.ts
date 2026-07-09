@@ -511,7 +511,8 @@ function filterAspectsByCategory(aspects: Record<string, string[]>, catalog: Rec
   }
   for (const [name, spec] of Object.entries(catalog)) {
     if (excluded.has(name.toLowerCase())) continue;
-    if (spec.applicableTo?.includes("PRODUCT") && !spec.applicableTo.includes("ITEM")) continue;
+    // Skip PRODUCT-only optional aspects; keep required ones so publish doesn't fail.
+    if (spec.applicableTo?.includes("PRODUCT") && !spec.applicableTo.includes("ITEM") && !spec.required) continue;
     if (!spec.required || out[name]) continue;
     if (spec.allowed?.includes("Does Not Apply")) out[name] = ["Does Not Apply"];
     else if (spec.allowed?.length) out[name] = [spec.allowed[0]];
