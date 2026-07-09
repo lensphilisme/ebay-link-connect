@@ -192,6 +192,7 @@ export const syncEbayListings = createServerFn({ method: "POST" })
           status: "active",
           sales: item.quantitySold,
           views: item.watchCount,
+          image_url: item.imageUrl || null,
           listed_at: item.listedAt || undefined,
         };
         const { data: existingRows } = await context.supabase.from("ebay_listings").select("id").eq("user_id", context.userId).eq("ebay_item_id", item.itemId).limit(10);

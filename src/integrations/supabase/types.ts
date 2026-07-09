@@ -170,6 +170,7 @@ export type Database = {
           ebay_offer_id: string | null
           ended_at: string | null
           id: string
+          image_url: string | null
           last_traffic_check: string | null
           listed_at: string
           marketplace_id: string
@@ -193,6 +194,7 @@ export type Database = {
           ebay_offer_id?: string | null
           ended_at?: string | null
           id?: string
+          image_url?: string | null
           last_traffic_check?: string | null
           listed_at?: string
           marketplace_id?: string
@@ -216,6 +218,7 @@ export type Database = {
           ebay_offer_id?: string | null
           ended_at?: string | null
           id?: string
+          image_url?: string | null
           last_traffic_check?: string | null
           listed_at?: string
           marketplace_id?: string
