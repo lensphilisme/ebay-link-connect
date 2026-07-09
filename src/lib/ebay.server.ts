@@ -492,7 +492,8 @@ function filterAspectsByCategory(aspects: Record<string, string[]>, catalog: Rec
     const canonical = nameByLower[name.toLowerCase()] || name;
     if (excluded.has(canonical.toLowerCase())) continue;
     const spec = catalog[canonical];
-    if (spec?.applicableTo?.includes("PRODUCT") && !spec.applicableTo.includes("ITEM")) continue;
+    // Keep required PRODUCT-only aspects (eBay validates them at publish time even on ITEM offers).
+    if (spec?.applicableTo?.includes("PRODUCT") && !spec.applicableTo.includes("ITEM") && !spec.required) continue;
     if (!spec && !/^(brand|condition|mpn|model|type|features)$/i.test(canonical)) continue;
     const maxLen = spec?.maxLen ?? 65;
     let cleanValues = values
