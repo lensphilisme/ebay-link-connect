@@ -2,13 +2,22 @@ import { createServerFn } from "@tanstack/react-start";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { ebayConsentUrl, exchangeEbayCode, fetchActiveEbayListings, fetchItemImagesShopping, getCategorySuggestions, getEbayCategoryTreeShallow, getFreshEbayToken, publishInventoryItem, reviseEbayListingText, endEbayFixedPriceListing } from "./ebay.server";
 
+// Scrub the "Ban [anything] the sale of amazon" phrase eBay policy titles.
+// The phrase sometimes shows up truncated as just "Ban ", "Ban of", "Ban of the",
+// etc. Rule: if the title mentions "the sale of amazon" ANYWHERE, remove the
+// standalone word "Ban " (with a space, so we don't touch Banana, Bank, Banjo)
+// and everything after it. Otherwise, still strip the full canonical phrase.
+export function stripBanAmazon(value: unknown): string {
+  let s = String(value ?? "");
+  if (/the\s+sale\s+of\s+amazon/i.test(s)) {
+    s = s.replace(/\bBan\s[\s\S]*$/i, "");
+  }
+  s = s.replace(/\bban\s+the\s+sale\s+of\s+amazon\b/gi, "");
+  return s.replace(/\s+/g, " ").replace(/\s+([,.;:])/g, "$1").trim();
+}
+
 function cleanTitle(value: unknown) {
-  return String(value ?? "")
-    .replace(/\bban\s+the\s+sale\s+of\s+amazon\b/gi, "")
-    .replace(/\s+/g, " ")
-    .replace(/\s+([,.;:])/g, "$1")
-    .trim()
-    .slice(0, 80);
+  return stripBanAmazon(value).slice(0, 80);
 }
 
 function fallbackRewrite(title: string) {
@@ -263,7 +272,7 @@ export const syncEbayListings = createServerFn({ method: "POST" })
         user_id: context.userId,
         ebay_item_id: item.itemId,
         sku: item.sku,
-        title: item.title,
+        title: stripBanAmazon(item.title) || item.title,
         price: item.price,
         currency: item.currency,
         marketplace_id: "EBAY_US",
@@ -435,72 +444,110 @@ export const aiDeepCategorySuggest = createServerFn({ method: "POST" })
     return picks;
   });
 
-// Optimizer: run rules over active listings. Ends dead listings, rewrites titles
-// with AI when signals warrant. Returns per-listing actions taken.
-export const runOptimizerRules = createServerFn({ method: "POST" })
+// ---------- Optimizer engine (two-phase) ----------
+// Phase 1 = analyze(). Deterministic, no AI, no eBay writes. Uses real synced
+// stats (views, watchers, sales, clicks, age) + hard rules (banned phrases,
+// bad titles) to decide what SHOULD happen to each active listing.
+// Phase 2 = applyOptimizerAction(). Runs one row at a time. AI (title/desc
+// rewrite) fires ONLY here, ONLY for rows analyze marked as needing a rewrite.
+
+type OptimizerAction = {
+  id: string;
+  ebay_item_id: string | null;
+  title: string;
+  action: "end" | "rewrite_title" | "rewrite_description" | "noop";
+  reason: string;
+  needs_ai: boolean;
+  age_days: number;
+  views: number;
+  clicks: number;
+  sales: number;
+};
+
+function scoreListing(l: any, rule: any): OptimizerAction {
+  const listedAt = l.listed_at ? new Date(l.listed_at) : null;
+  const ageDays = listedAt ? Math.floor((Date.now() - listedAt.getTime()) / 86400000) : 0;
+  const daysNoSales = Number(rule?.optimizer_no_sales_days ?? 30);
+  const daysNoViewsRewrite = Number(rule?.optimizer_low_views_days ?? 14);
+  const poorExposureDays = Number(rule?.optimizer_poor_exposure_days ?? 45);
+  const views = Number(l.views || 0);
+  const clicks = Number(l.clicks || 0);
+  const sales = Number(l.sales || 0);
+  const base = { id: l.id, ebay_item_id: l.ebay_item_id ?? null, title: l.title, age_days: ageDays, views, clicks, sales };
+  const hasBanned = /the\s+sale\s+of\s+amazon/i.test(l.title || "") || /\bBan\s.*the\s+sale\s+of\s+amazon/i.test(l.title || "");
+
+  // Hard rule 1: prohibited phrase — deterministic fix, no AI needed.
+  if (hasBanned) return { ...base, action: "rewrite_title", reason: "prohibited marketplace phrase (Ban ... the sale of amazon)", needs_ai: false };
+  // Hard rule 2: dead listing (no sales after threshold days) → end it.
+  if (ageDays >= daysNoSales && sales === 0) return { ...base, action: "end", reason: `${ageDays}d live · 0 sales`, needs_ai: false };
+  // Hard rule 3: zero views after long exposure = title is invisible → rewrite (AI).
+  if (ageDays >= daysNoViewsRewrite && views === 0) return { ...base, action: "rewrite_title", reason: `${ageDays}d · 0 views`, needs_ai: true };
+  // Hard rule 4: has views but 0 clicks over long window → title/description not converting → rewrite (AI).
+  if (ageDays >= poorExposureDays && clicks === 0 && views > 0) return { ...base, action: "rewrite_description", reason: `${ageDays}d · ${views} views · 0 clicks`, needs_ai: true };
+  // Hard rule 5: some views but under threshold → try a fresh title (AI).
+  if (ageDays >= daysNoViewsRewrite && views > 0 && views < 5) return { ...base, action: "rewrite_title", reason: `${ageDays}d · only ${views} views`, needs_ai: true };
+  return { ...base, action: "noop", reason: "healthy", needs_ai: false };
+}
+
+// Fast analysis. NO AI, NO writes. Returns the plan for the frontend to
+// walk one-by-one with a progress bar.
+export const analyzeOptimizer = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((data: { dryRun?: boolean; listingIds?: string[] }) => data)
-  .handler(async ({ data, context }: any) => {
-    const token = data.dryRun ? null : await getFreshEbayToken(context.supabase, context.userId).catch(() => null);
+  .inputValidator((data: { listingIds?: string[] } = {}) => data)
+  .handler(async ({ data, context }: any): Promise<OptimizerAction[]> => {
     const { data: rule } = await context.supabase.from("automation_rules").select("*").eq("user_id", context.userId).maybeSingle();
-    const daysNoSales = Number(rule?.optimizer_no_sales_days ?? 30);
-    const daysNoViewsRewrite = Number(rule?.optimizer_low_views_days ?? 14);
-    const poorExposureDays = Number(rule?.optimizer_poor_exposure_days ?? 45);
     let q = context.supabase.from("ebay_listings").select("*").eq("user_id", context.userId).eq("status", "active");
-    if (data.listingIds?.length) q = q.in("id", data.listingIds);
+    if (data?.listingIds?.length) q = q.in("id", data.listingIds);
     const { data: listings, error } = await q;
     if (error) throw error;
-    const actions: { id: string; title: string; action: string; detail?: string; error?: string }[] = [];
-    for (const l of listings || []) {
-      const listedAt = l.listed_at ? new Date(l.listed_at) : null;
-      const ageDays = listedAt ? Math.floor((Date.now() - listedAt.getTime()) / 86400000) : 0;
-      if (ageDays >= daysNoSales && (l.sales || 0) === 0) {
-        const action: { id: string; title: string; action: string; detail?: string; error?: string } = { id: l.id, title: l.title, action: data.dryRun ? "end_recommended" : "ended", detail: `${ageDays}d no sales` };
-        actions.push(action);
-        if (!data.dryRun) {
-          try {
-            if (token && l.ebay_item_id) await endEbayFixedPriceListing(token, l.ebay_item_id, "NotAvailable");
-            await context.supabase.from("ebay_listings").update({ status: "ended", ended_at: new Date().toISOString() }).eq("id", l.id);
-          } catch (e) {
-            action.error = e instanceof Error ? e.message : String(e);
-            await context.supabase.from("ebay_listings").update({ status: "error" }).eq("id", l.id);
-          }
-        }
-        continue;
-      }
-      const needsRewrite = /ban\s+the\s+sale\s+of\s+amazon/i.test(l.title || "") || (l.views || 0) === 0 || (ageDays >= daysNoViewsRewrite && (l.views || 0) < 5) || (ageDays >= poorExposureDays && (l.clicks || 0) === 0);
-      if (needsRewrite) {
-        let newTitle = fallbackRewrite(l.title);
-        if (process.env.LOVABLE_API_KEY) {
-          try {
-            const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-              method: "POST",
-              headers: { "Lovable-API-Key": process.env.LOVABLE_API_KEY, "Content-Type": "application/json" },
-              body: JSON.stringify({
-                model: "google/gemini-3-flash-preview",
-                messages: [
-                  { role: "system", content: "Rewrite an eBay title for search. Max 80 chars. Keep brand/model/spec keywords. No emojis, no ALL CAPS. Return the title only." },
-                  { role: "user", content: l.title },
-                ],
-              }),
-            });
-            const j = await res.json();
-            newTitle = cleanTitle(j.choices?.[0]?.message?.content || newTitle);
-          } catch {}
-        }
-        const reason = /ban\s+the\s+sale\s+of\s+amazon/i.test(l.title || "") ? "removed prohibited marketplace text" : `${ageDays}d, ${l.views || 0} views, ${l.clicks || 0} clicks, ${l.sales || 0} sales`;
-        const action: { id: string; title: string; action: string; detail?: string; error?: string } = { id: l.id, title: l.title, action: "rewrite_title", detail: `${newTitle} · ${reason}` };
-        actions.push(action);
-        if (!data.dryRun && newTitle && newTitle !== l.title) {
-          try {
-            if (token && l.ebay_item_id) await reviseEbayListingText(token, l.ebay_item_id, newTitle);
-            await context.supabase.from("ebay_listings").update({ title: newTitle }).eq("id", l.id);
-          } catch (e) {
-            action.error = e instanceof Error ? e.message : String(e);
-          }
-        }
-      }
-    }
-    await context.supabase.from("activity_logs").insert({ user_id: context.userId, level: "info", category: "optimizer", message: `Optimizer ${data.dryRun ? "dry-run" : "run"}: ${actions.length} action(s)`, metadata: { actions } });
-    return actions;
+    return (listings || []).map((l: any) => scoreListing(l, rule));
   });
+
+// Apply ONE action. AI only fires when `needs_ai` was true in analyze.
+export const applyOptimizerAction = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((data: { id: string; action: "end" | "rewrite_title" | "rewrite_description"; useAi?: boolean }) => data)
+  .handler(async ({ data, context }: any) => {
+    const { data: l } = await context.supabase.from("ebay_listings").select("*").eq("user_id", context.userId).eq("id", data.id).maybeSingle();
+    if (!l) throw new Error("Listing not found");
+    const token = await getFreshEbayToken(context.supabase, context.userId).catch(() => null);
+    if (data.action === "end") {
+      if (token && l.ebay_item_id) await endEbayFixedPriceListing(token, l.ebay_item_id, "NotAvailable");
+      await context.supabase.from("ebay_listings").update({ status: "ended", ended_at: new Date().toISOString() }).eq("id", l.id);
+      return { ok: true, action: "end", newTitle: null };
+    }
+    if (data.action === "rewrite_title") {
+      let newTitle = fallbackRewrite(l.title);
+      if (data.useAi && process.env.LOVABLE_API_KEY) {
+        try {
+          const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+            method: "POST",
+            headers: { "Lovable-API-Key": process.env.LOVABLE_API_KEY, "Content-Type": "application/json" },
+            body: JSON.stringify({
+              model: "google/gemini-3-flash-preview",
+              messages: [
+                { role: "system", content: "Rewrite an eBay title for search. Max 80 chars. Keep brand/model/spec keywords. No emojis, no ALL CAPS. No marketplace names. Return the title only." },
+                { role: "user", content: l.title },
+              ],
+            }),
+          });
+          const j = await res.json();
+          newTitle = cleanTitle(j.choices?.[0]?.message?.content || newTitle);
+        } catch { /* keep fallback */ }
+      }
+      if (newTitle && newTitle !== l.title) {
+        if (token && l.ebay_item_id) await reviseEbayListingText(token, l.ebay_item_id, newTitle);
+        await context.supabase.from("ebay_listings").update({ title: newTitle }).eq("id", l.id);
+      }
+      return { ok: true, action: "rewrite_title", newTitle };
+    }
+    if (data.action === "rewrite_description") {
+      // Description rewrites need AI; if disabled, mark noop.
+      if (!data.useAi || !process.env.LOVABLE_API_KEY) return { ok: true, action: "noop", newTitle: null };
+      // Nothing to revise without a description column; we log the recommendation.
+      await context.supabase.from("activity_logs").insert({ user_id: context.userId, level: "info", category: "optimizer", message: `Description rewrite queued: ${l.title}`, metadata: { listingId: l.id } });
+      return { ok: true, action: "rewrite_description", newTitle: null };
+    }
+    return { ok: true, action: "noop", newTitle: null };
+  });
+

@@ -3,7 +3,7 @@ import { AppShell } from "@/components/app-shell";
 import { useState, useMemo, useEffect } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { getCjCategories, searchCjProducts } from "@/lib/cj.functions";
+import { getCjCategories, searchCjProducts, bulkSendCjToDrafts } from "@/lib/cj.functions";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -97,52 +97,16 @@ function ProductsPage() {
     setSelected({});
   }
 
+  const bulkDraftFn = useServerFn(bulkSendCjToDrafts);
   const bulkDraft = useMutation({
     mutationFn: async () => {
       const chosen = items.filter((p) => selected[p.pid]);
       if (chosen.length === 0) throw new Error("Nothing selected");
-      const { data: auth } = await supabase.auth.getUser();
-      if (!auth.user) throw new Error("Not signed in");
-      const { data: rule } = await supabase.from("automation_rules").select("markup_percent,ebay_fee_buffer_percent").maybeSingle();
-      const markupPct = Number(rule?.markup_percent ?? 50);
-      const feePct = Number(rule?.ebay_fee_buffer_percent ?? 17) / 100;
-      const rows = chosen.map((p) => {
-        const itemCost = Number(p.sellPrice) || 0;
-        // Conservative shipping estimate of 20% of item cost when no freight quote yet
-        const shipping = itemCost * 0.2;
-        const landed = itemCost + shipping;
-        const profit = landed * (markupPct / 100);
-        const preFeePrice = landed + profit;
-        const ebayFee = preFeePrice * feePct;
-        const finalSell = preFeePrice + ebayFee;
-        return {
-          user_id: auth.user!.id,
-          cj_product_id: p.pid,
-          sku: p.productSku || p.pid,
-          title: (p.productNameEn || "").slice(0, 80),
-          price: Number(finalSell.toFixed(2)),
-          images: [p.productImage].filter(Boolean),
-          status: "pending" as const,
-          profit: {
-            item_cost: itemCost,
-            shipping_estimate: Number(shipping.toFixed(2)),
-            markup_pct: markupPct,
-            ebay_fee_pct: feePct,
-            ebay_fee: Number(ebayFee.toFixed(2)),
-            profit: Number(profit.toFixed(2)),
-            note: "Estimated; refine on product detail with live freight quote.",
-          },
-        };
-      });
-      const { error } = await supabase.from("listing_drafts").upsert(rows, {
-        onConflict: "user_id,cj_product_id",
-        ignoreDuplicates: true,
-      });
-      if (error) throw error;
-      return chosen.length;
+      return bulkDraftFn({ data: { pids: chosen.map((p) => p.pid), endCountry: "US" } });
     },
-    onSuccess: (n) => {
-      toast.success(`Added ${n} product${n === 1 ? "" : "s"} to drafts with calculated final price`);
+    onSuccess: (res: any) => {
+      const failed = (res.results || []).filter((r: any) => !r.ok).length;
+      toast.success(`Sent ${res.ok}/${res.total} to drafts with auto shipping quote${failed ? ` · ${failed} failed` : ""}`);
       setSelected({});
       navigate({ to: "/drafts" });
     },
