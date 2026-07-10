@@ -2,13 +2,22 @@ import { createServerFn } from "@tanstack/react-start";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { ebayConsentUrl, exchangeEbayCode, fetchActiveEbayListings, fetchItemImagesShopping, getCategorySuggestions, getEbayCategoryTreeShallow, getFreshEbayToken, publishInventoryItem, reviseEbayListingText, endEbayFixedPriceListing } from "./ebay.server";
 
+// Scrub the "Ban [anything] the sale of amazon" phrase eBay policy titles.
+// The phrase sometimes shows up truncated as just "Ban ", "Ban of", "Ban of the",
+// etc. Rule: if the title mentions "the sale of amazon" ANYWHERE, remove the
+// standalone word "Ban " (with a space, so we don't touch Banana, Bank, Banjo)
+// and everything after it. Otherwise, still strip the full canonical phrase.
+export function stripBanAmazon(value: unknown): string {
+  let s = String(value ?? "");
+  if (/the\s+sale\s+of\s+amazon/i.test(s)) {
+    s = s.replace(/\bBan\s[\s\S]*$/i, "");
+  }
+  s = s.replace(/\bban\s+the\s+sale\s+of\s+amazon\b/gi, "");
+  return s.replace(/\s+/g, " ").replace(/\s+([,.;:])/g, "$1").trim();
+}
+
 function cleanTitle(value: unknown) {
-  return String(value ?? "")
-    .replace(/\bban\s+the\s+sale\s+of\s+amazon\b/gi, "")
-    .replace(/\s+/g, " ")
-    .replace(/\s+([,.;:])/g, "$1")
-    .trim()
-    .slice(0, 80);
+  return stripBanAmazon(value).slice(0, 80);
 }
 
 function fallbackRewrite(title: string) {
