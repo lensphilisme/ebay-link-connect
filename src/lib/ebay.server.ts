@@ -429,6 +429,8 @@ function normalizeAspects(input: any, draft: any, extra: Record<string, unknown>
     if (excluded.has(name.toLowerCase()) && !extraKeys.has(name.toLowerCase())) continue;
     const values = (Array.isArray(value) ? value : [value])
       .map((v) => shortenAspectValue(name, v))
+      .filter((v) => !/^colou?r$/i.test(name) || classifyVariantValue(v).category === "Color")
+      .filter((v) => !/^size$/i.test(name) || classifyVariantValue(v).category === "Size")
       .filter(Boolean)
       .slice(0, 10);
     if (values.length) aspects[name] = Array.from(new Set(values));
