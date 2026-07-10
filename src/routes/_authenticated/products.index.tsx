@@ -201,6 +201,32 @@ function ProductsPage() {
           <span className="text-sm font-medium">{selectedIds.length} selected</span>
           <Button size="sm" variant="ghost" onClick={() => setSelected({})}>Clear</Button>
           <div className="flex-1" />
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={async () => {
+              const chosen = items.filter((p) => selected[p.pid]);
+              if (chosen.length === 0) return;
+              const { data: rule } = await supabase.from("automation_rules").select("markup_percent,ebay_fee_buffer_percent").maybeSingle();
+              const n = exportProductsToFbXlsx(
+                chosen.map((p) => ({
+                  pid: p.pid,
+                  productSku: p.productSku,
+                  productNameEn: p.productNameEn,
+                  productImage: p.productImage,
+                  categoryName: p.categoryName,
+                  sellPrice: p.sellPrice,
+                  description: (p as any).description ?? null,
+                })),
+                { markupPercent: Number(rule?.markup_percent ?? 50), ebayFeeBufferPercent: Number(rule?.ebay_fee_buffer_percent ?? 17) },
+                `facebook-marketplace-${new Date().toISOString().slice(0,10)}.xlsx`,
+              );
+              toast.success(`Exported ${n} product${n === 1 ? "" : "s"} to Facebook Marketplace XLSX${n > 50 ? " (FB caps a single upload at 50 — split the file before uploading)" : ""}`);
+            }}
+          >
+            <FileSpreadsheet className="h-4 w-4 mr-1" />
+            Export to FB Marketplace
+          </Button>
           <Button size="sm" onClick={() => bulkDraft.mutate()} disabled={bulkDraft.isPending}>
             <FileEdit className="h-4 w-4 mr-1" />
             {bulkDraft.isPending ? "Adding…" : "Send to Drafts"}
