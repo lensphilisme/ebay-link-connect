@@ -10,7 +10,8 @@ import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Search, Loader2, ChevronLeft, ChevronRight, FileEdit } from "lucide-react";
+import { Search, Loader2, ChevronLeft, ChevronRight, FileEdit, FileSpreadsheet } from "lucide-react";
+import { exportProductsToFbXlsx } from "@/lib/fb-marketplace";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 
