@@ -153,6 +153,22 @@ function DraftsPage() {
         <Button size="sm" disabled={!selectedIds.length || bulkDelete.isPending} variant="destructive" onClick={() => bulkDelete.mutate(selectedIds)}><Trash2 className="h-4 w-4 mr-1" />Delete</Button>
       </div>
 
+      {pushProgress && (
+        <Card className="mb-3 p-3">
+          <div className="flex items-center justify-between mb-1 text-xs">
+            <div className="flex items-center gap-2 min-w-0">
+              <Rocket className="h-3.5 w-3.5 text-primary shrink-0" />
+              <span className="font-medium">Pushing to eBay</span>
+              {pushProgress.current && <span className="text-muted-foreground truncate">· {truncate(pushProgress.current, 40)}</span>}
+            </div>
+            <span className="text-muted-foreground tabular-nums shrink-0">{pushProgress.done}/{pushProgress.total}</span>
+          </div>
+          <Progress value={pushProgress.total ? (pushProgress.done / pushProgress.total) * 100 : 0} className="h-2" />
+        </Card>
+      )}
+
+
+
       <Card className="overflow-hidden border shadow-sm">
         {isLoading ? <div className="p-10 text-center"><Loader2 className="h-5 w-5 animate-spin mx-auto" /></div> : drafts.length === 0 ? (
           <div className="p-12 text-center text-sm text-muted-foreground"><FileEdit className="h-8 w-8 mx-auto mb-2" />No drafts yet. Select products from CJ research and send them here.</div>
