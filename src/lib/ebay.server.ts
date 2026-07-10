@@ -718,6 +718,20 @@ function uniqueVariationOptions(variants: DraftVariant[], axes: string[]) {
   });
 }
 
+function stripStaleVariantSpecifics(input: any, axes: string[]) {
+  const axisSet = new Set(axes.map((axis) => cleanText(axis).toLowerCase()).filter(Boolean));
+  const out: Record<string, unknown> = { ...(input || {}) };
+  for (const [key, value] of Object.entries(out)) {
+    const name = cleanText(key);
+    const lower = name.toLowerCase();
+    if (axisSet.has(lower)) continue;
+    const values = Array.isArray(value) ? value : [value];
+    if (/^colou?r$/i.test(name) && values.some((v) => classifyVariantValue(cleanText(v)).category !== "Color")) delete out[key];
+    if (/^size$/i.test(name) && values.some((v) => classifyVariantValue(cleanText(v)).category !== "Size")) delete out[key];
+  }
+  return out;
+}
+
 
 async function putInventoryItem(accessToken: string, sku: string, draft: any, imageUrls: string[], aspects: Record<string, string[]>) {
   if (imageUrls.length === 0) throw new Error(`eBay requires at least one valid http(s) image URL before publishing SKU ${sku}.`);
@@ -780,13 +794,14 @@ async function publishVariantGroup(accessToken: string, draft: any, policies: an
   const variantResults: PublishVariantResult[] = [];
   const specifications = axes.map((axis) => ({ name: axis, values: Array.from(new Set(optionsByVariant.map((options) => options[axis]).filter(Boolean))).slice(0, 60) }));
   const imageAxis = axes.find((a) => /color|colour|style|pattern/i.test(a)) || axes[0];
+  const baseSpecifics = stripStaleVariantSpecifics(draft.item_specifics, axes);
 
   for (const [index, variant] of variants.entries()) {
     const sku = cleanText(variant.variantSku || variant.sku || variant.vid || `${draft.sku}-${index + 1}`).replace(/\s+/g, "-").slice(0, 50);
     try {
       const optionAspects = optionsByVariant[index];
       const imageUrls = normalizeImageUrls(variant.variantImage, variant.image, baseImages, allImages);
-      const aspects = filterAspectsByCategory(normalizeAspects(draft.item_specifics, draft, optionAspects, axes), aspectCatalog);
+      const aspects = filterAspectsByCategory(normalizeAspects(baseSpecifics, draft, optionAspects, axes), aspectCatalog);
       for (const [k, v] of Object.entries(optionAspects)) if (v) aspects[k] = [String(v).slice(0, 65)];
       await putInventoryItem(accessToken, sku, draft, imageUrls, aspects);
       const variantPrice = priceNumber(variant.price ?? variant.variantSellPrice) || priceNumber(draft.price);
@@ -817,7 +832,7 @@ async function publishVariantGroup(accessToken: string, draft: any, policies: an
   const groupBody = {
     title: safeTitle(draft.title, draft.sku),
     description: safeDescription(draft),
-    aspects: filterAspectsByCategory(normalizeAspects(draft.item_specifics, draft, {}, axes), aspectCatalog, axes),
+    aspects: filterAspectsByCategory(normalizeAspects(baseSpecifics, draft, {}, axes), aspectCatalog, axes),
     imageUrls: allImages,
     variantSKUs: successfulSKUs,
     variesBy: { aspectsImageVariesBy: imageAxis ? [imageAxis] : undefined, specifications },
