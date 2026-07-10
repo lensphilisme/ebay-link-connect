@@ -135,7 +135,7 @@ function ProductDetailPage() {
   const ebayFee = preFeePrice * EBAY_FEE_PCT;
   const finalSell = preFeePrice + ebayFee;
   const profit = desiredProfit;
-  const axes = useMemo(() => variantAxes(p?.productKeyEn, variants[0]), [p?.productKeyEn, variants]);
+  const axes = useMemo(() => deriveAxes(variants), [variants]);
   const selectedOptions = activeVariant ? variantOptionMap(activeVariant, axes) : {};
   const priceForVariant = (rawCost: unknown) => {
     const variantCost = Number(rawCost ?? itemCost) || itemCost;
