@@ -272,7 +272,7 @@ export const syncEbayListings = createServerFn({ method: "POST" })
         user_id: context.userId,
         ebay_item_id: item.itemId,
         sku: item.sku,
-        title: item.title,
+        title: stripBanAmazon(item.title) || item.title,
         price: item.price,
         currency: item.currency,
         marketplace_id: "EBAY_US",
