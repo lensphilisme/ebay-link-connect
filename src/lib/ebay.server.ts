@@ -1,4 +1,4 @@
-import { classifyAxis } from "./variant-classifier";
+import { classifyAxis, classifyVariantValue } from "./variant-classifier";
 
 const EBAY_API_BASE = process.env.EBAY_API_BASE || "https://api.ebay.com";
 const EBAY_TRADING_ENDPOINT = "https://api.ebay.com/ws/api.dll";
@@ -636,16 +636,6 @@ function variantRowsFromDraft(draft: any): DraftVariant[] {
   return [];
 }
 
-function variantAxes(draft: any, sample: DraftVariant) {
-  const configured = draft?.profit?.variant_axes || draft?.variant_axes;
-  if (Array.isArray(configured) && configured.length) return configured.map((a: unknown) => cleanText(a)).filter(Boolean);
-  const keyHint = cleanText(draft?.profit?.product_key || draft?.productKeyEn || "");
-  if (keyHint) return keyHint.split(/[-,/|>]+/).map((a) => cleanText(a)).filter(Boolean);
-  const sampleParts = cleanText(sample.variantKey || sample.variantNameEn || "").split(/[-,/|]+/).filter(Boolean);
-  if (sampleParts.length <= 1) return ["Option"];
-  return sampleParts.map((_, i) => `Option ${i + 1}`);
-}
-
 const ITEM_SPECIFIC_AXIS_CONFLICTS = new Set(["type", "brand", "model", "mpn", "condition", "features", "feature", "country", "material"]);
 
 function splitVariantLabel(variant: DraftVariant): string[] {
@@ -653,6 +643,22 @@ function splitVariantLabel(variant: DraftVariant): string[] {
   if (!label) return [];
   return label.split(/[-,/|]+/).map((p) => cleanText(p)).filter(Boolean);
 }
+
+function axisNameForValue(value: string, index: number, hint?: string) {
+  const { category } = classifyVariantValue(value);
+  if (category !== "Unknown" && category !== "Color") return CATEGORY_TO_ASPECT[category] || category;
+  const cleanHint = cleanText(hint).toLowerCase();
+  if (/size/.test(cleanHint)) return "Size";
+  if (/colou?r/.test(cleanHint) && category === "Color") return "Color";
+  return `Variant Option ${index + 1}`;
+}
+
+const CATEGORY_TO_ASPECT: Record<string, string> = {
+  Color: "Color", Size: "Size", Material: "Material", Pattern: "Pattern",
+  Style: "Style", Capacity: "Capacity", Length: "Length", Width: "Width",
+  Height: "Height", Quantity: "Quantity", Model: "Model Number", Shape: "Shape",
+  Type: "Style", Version: "Style", Design: "Design", "Pack Size": "Pack Size", Layout: "Style",
+};
 
 // Deterministic classification-based axis derivation.
 // Never trusts the CJ attribute name; classifies actual values across all variants.
@@ -670,16 +676,14 @@ function safeVariationAxes(draft: any, _sample: DraftVariant, catalog: Record<st
   // 3) Classify each column and assign a safe axis name.
   const catalogLower = new Map(Object.keys(catalog || {}).map((name) => [name.toLowerCase(), catalog[name]]));
   const seen = new Set<string>();
-  const CATEGORY_TO_ASPECT: Record<string, string> = {
-    Color: "Color", Size: "Size", Material: "Material", Pattern: "Pattern",
-    Style: "Style", Capacity: "Capacity", Length: "Length", Width: "Width",
-    Height: "Height", Quantity: "Quantity", Model: "Model Number", Shape: "Shape",
-    Type: "Style", Version: "Style", Design: "Design", "Pack Size": "Pack Size", Layout: "Style",
-  };
-
   const axes = columns.map((values, i) => {
     const category = classifyAxis(values, hints[i]);
     let axis = category === "Unknown" ? `Variant Option ${i + 1}` : (CATEGORY_TO_ASPECT[category] || category);
+    if (axis === "Color" && values.some((value) => classifyVariantValue(value).category !== "Color")) {
+      axis = values.find((value) => classifyVariantValue(value).category !== "Color")
+        ? axisNameForValue(values.find((value) => classifyVariantValue(value).category !== "Color") || "", i, hints[i])
+        : `Variant Option ${i + 1}`;
+    }
     // Avoid axes that collide with required category aspects (eBay rejects those as variation specifics).
     const lower = axis.toLowerCase();
     if (ITEM_SPECIFIC_AXIS_CONFLICTS.has(lower) || catalogLower.get(lower)?.required) {
