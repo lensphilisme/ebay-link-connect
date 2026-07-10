@@ -3,7 +3,7 @@ import { AppShell } from "@/components/app-shell";
 import { useState, useMemo, useEffect } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { getCjCategories, searchCjProducts } from "@/lib/cj.functions";
+import { getCjCategories, searchCjProducts, bulkSendCjToDrafts } from "@/lib/cj.functions";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
