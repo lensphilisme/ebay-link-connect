@@ -96,7 +96,7 @@ export const bulkSendCjToDrafts = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((data: { pids: string[]; endCountry?: string }) => data)
   .handler(async ({ data, context }: any) => {
-    const pids = Array.from(new Set((data.pids || []).map(String).filter(Boolean)));
+    const pids: string[] = Array.from(new Set((data.pids || []).map(String).filter(Boolean))) as string[];
     if (pids.length === 0) throw new Error("No products selected");
     const endCountry = (data.endCountry || "US").toUpperCase();
     const token = await tok(context);
