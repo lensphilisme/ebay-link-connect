@@ -87,3 +87,94 @@ export const getIntegrationStatus = createServerFn({ method: "GET" })
       ebay: { connected: ebayConnected, source: ebayConnected ? "user" : null, last: ebayRow?.last_validated_at || null },
     };
   });
+
+// Bulk send CJ products to the drafts queue with an automatic freight quote.
+// For each product we hit CJ product detail, pick the first variant, quote the
+// cheapest freight option to the target country (US by default), then upsert
+// a draft that already includes shipping in its landed cost.
+export const bulkSendCjToDrafts = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((data: { pids: string[]; endCountry?: string }) => data)
+  .handler(async ({ data, context }: any) => {
+    const pids = Array.from(new Set((data.pids || []).map(String).filter(Boolean)));
+    if (pids.length === 0) throw new Error("No products selected");
+    const endCountry = (data.endCountry || "US").toUpperCase();
+    const token = await tok(context);
+    const { data: rule } = await context.supabase
+      .from("automation_rules")
+      .select("markup_percent,ebay_fee_buffer_percent")
+      .eq("user_id", context.userId)
+      .maybeSingle();
+    const markupPct = Number(rule?.markup_percent ?? 50);
+    const feePct = Number(rule?.ebay_fee_buffer_percent ?? 17) / 100;
+
+    const results: { pid: string; ok: boolean; carrier?: string; shipping?: number; error?: string }[] = [];
+    // Fetch details/freight in small parallel batches to keep it fast without hammering CJ.
+    const batchSize = 4;
+    for (let i = 0; i < pids.length; i += batchSize) {
+      const batch = pids.slice(i, i + batchSize);
+      const done = await Promise.all(batch.map(async (pid) => {
+        try {
+          const detail: any = await cjProductDetail(pid, endCountry, token);
+          const variants: any[] = detail?.variants ?? detail?.variantList ?? detail?.productVariants ?? [];
+          const first = variants[0];
+          const vid = first?.vid || detail?.vid;
+          const itemCost = Number(first?.variantSellPrice ?? detail?.sellPrice ?? 0);
+          let shipping = itemCost * 0.2;
+          let carrierName: string | null = null;
+          let carrierDays: string | null = null;
+          if (vid) {
+            try {
+              const options = await cjFreightCalculate({ endCountryCode: endCountry, products: [{ vid, quantity: 1 }] }, token);
+              const cheapest = [...(options || [])].sort((a, b) => Number(a.logisticPrice ?? 0) - Number(b.logisticPrice ?? 0))[0];
+              if (cheapest) {
+                shipping = Number(cheapest.logisticPrice ?? shipping);
+                carrierName = cheapest.logisticName;
+                carrierDays = cheapest.logisticAging;
+              }
+            } catch { /* fall back to estimate */ }
+          }
+          const landed = itemCost + shipping;
+          const desiredProfit = landed * (markupPct / 100);
+          const preFee = landed + desiredProfit;
+          const ebayFee = preFee * feePct;
+          const finalSell = preFee + ebayFee;
+          const title = String(detail?.productNameEn || "").slice(0, 80);
+          const images = [detail?.bigImage, detail?.productImage, ...(detail?.productImageSet || [])].filter(Boolean).slice(0, 12);
+          const row = {
+            user_id: context.userId,
+            cj_product_id: pid,
+            cj_variant_id: vid || null,
+            sku: first?.variantSku || detail?.productSku || pid,
+            title,
+            price: Number(finalSell.toFixed(2)),
+            images,
+            description: detail?.description ?? "",
+            status: "pending" as const,
+            item_specifics: { Brand: "Unbranded", Condition: "New" },
+            profit: {
+              item_cost: itemCost,
+              shipping: Number(shipping.toFixed(2)),
+              carrier: carrierName,
+              carrier_days: carrierDays,
+              markup_pct: markupPct,
+              ebay_fee_pct: feePct,
+              ebay_fee: Number(ebayFee.toFixed(2)),
+              profit: Number(desiredProfit.toFixed(2)),
+              desired_profit: Number(desiredProfit.toFixed(2)),
+              end_country: endCountry,
+              start_country: "CN",
+              product_key: detail?.productKeyEn || null,
+              auto_quoted: true,
+            },
+          };
+          await context.supabase.from("listing_drafts").upsert(row, { onConflict: "user_id,cj_product_id", ignoreDuplicates: false });
+          return { pid, ok: true, carrier: carrierName || undefined, shipping: Number(shipping.toFixed(2)) };
+        } catch (e) {
+          return { pid, ok: false, error: e instanceof Error ? e.message : String(e) };
+        }
+      }));
+      results.push(...done);
+    }
+    return { total: pids.length, ok: results.filter((r) => r.ok).length, results };
+  });
