@@ -90,14 +90,39 @@ function DraftsPage() {
     onError: (e: Error) => toast.error(e.message),
   });
 
+  const [pushProgress, setPushProgress] = useState<{ done: number; total: number; current?: string } | null>(null);
   const push = useMutation({
-    mutationFn: async (ids: string[]) => pushFn({ data: { draftIds: ids } }),
+    mutationFn: async (ids: string[]) => {
+      setPushProgress({ done: 0, total: ids.length });
+      const rows: any[] = [];
+      for (let i = 0; i < ids.length; i++) {
+        const id = ids[i];
+        const draft = drafts.find((d: any) => d.id === id);
+        setPushProgress({ done: i, total: ids.length, current: draft?.title });
+        try {
+          const res = await pushFn({ data: { draftIds: [id] } });
+          rows.push(...(res || []));
+        } catch (e) {
+          const message = e instanceof Error ? e.message : String(e);
+          rows.push({ draftId: id, ok: false, error: message });
+        }
+      }
+      setPushProgress({ done: ids.length, total: ids.length });
+      return rows;
+    },
     onSuccess: (rows: any[]) => {
-      toast.success(`Pushed ${rows.filter((r) => r.ok).length}/${rows.length} draft(s)`);
+      const okCount = rows.filter((r) => r.ok).length;
+      const failed = rows.filter((r) => !r.ok);
+      toast.success(`Pushed ${okCount}/${rows.length} draft(s)`);
+      const feedbackLock = failed.find((r) => /low feedback rating/i.test(String(r.error || "")));
+      if (feedbackLock) {
+        toast.error("eBay blocked Fixed Price listings on this account (low feedback rating). Build feedback with a few small purchases/sales, or contact eBay to lift the limit.", { duration: 12000 });
+      }
       setSelected({});
       refetch();
+      setTimeout(() => setPushProgress(null), 1500);
     },
-    onError: (e: Error) => toast.error(e.message),
+    onError: (e: Error) => { toast.error(e.message); setPushProgress(null); },
   });
 
   const bulkDelete = useMutation({
