@@ -87,6 +87,10 @@ function containsAny(hay: string, needles: string[]) {
   return needles.some((n) => new RegExp(`(^|\\s|-)${n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(\\s|-|$|s)`, "i").test(hay));
 }
 
+function isExactColorValue(value: string) {
+  return COLORS.some((color) => value === color || value === color.replace(/-/g, " "));
+}
+
 export function classifyVariantValue(rawValue: string): { category: VariantCategory; confidence: number } {
   const value = String(rawValue || "").trim();
   if (!value) return { category: "Unknown", confidence: 0 };
@@ -97,11 +101,15 @@ export function classifyVariantValue(rawValue: string): { category: VariantCateg
     scores[cat] = Math.max(scores[cat] || 0, score);
   };
 
+  const exactColor = isExactColorValue(norm);
+
   // Design first — a design word here typically outranks a stray color mention.
-  if (containsAny(norm, DESIGN_NOUNS)) add("Design", 90);
+  // Exception: standalone color names like "Rose" are true colors, not designs.
+  if (!exactColor && containsAny(norm, DESIGN_NOUNS)) add("Design", 90);
 
   // Colors — only when a real color token is present and no strong design noun.
-  if (containsAny(norm, COLORS)) add("Color", scores["Design"] ? 55 : 88);
+  if (exactColor) add("Color", 94);
+  else if (containsAny(norm, COLORS)) add("Color", scores["Design"] ? 55 : 88);
 
   // Sizes — letter codes, size words, size labels.
   if (SIZE_LETTERS.test(norm) || SIZE_WORDS.test(norm) || SIZE_LABELS.test(norm) || BED_SIZE.test(norm) || PAPER_SIZE.test(norm)) {
