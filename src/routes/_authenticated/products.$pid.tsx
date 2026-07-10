@@ -14,6 +14,7 @@ import { Carousel, CarouselContent, CarouselItem, CarouselNext, CarouselPrevious
 import { ArrowLeft, Loader2, Truck, FileEdit } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
+import { classifyAxis } from "@/lib/variant-classifier";
 
 export const Route = createFileRoute("/_authenticated/products/$pid")({
   component: ProductDetailPage,
@@ -50,16 +51,32 @@ function cleanImageList(...inputs: unknown[]) {
   return Array.from(new Set(urls));
 }
 
-function variantAxes(productKey?: string, firstVariant?: any) {
-  const keyAxes = String(productKey || "").split(/[-,/|>]+/).map((p) => p.trim()).filter(Boolean);
-  if (keyAxes.length) return keyAxes;
-  const parts = String(firstVariant?.variantKey || firstVariant?.variantNameEn || "").split(/[-,/|]+/).filter(Boolean);
-  return parts.length > 1 ? parts.map((_, i) => `Option ${i + 1}`) : ["Option"];
+function splitVariantParts(v: any): string[] {
+  const label = String(v?.variantKey || v?.variantNameEn || v?.variantSku || v?.vid || "").trim();
+  return label.split(/[-,/|>]+/).map((p) => p.trim()).filter(Boolean);
+}
+
+function deriveAxes(variants: any[]): string[] {
+  if (!variants.length) return [];
+  const slotCount = Math.max(1, ...variants.map((v) => splitVariantParts(v).length || 1));
+  const axes: string[] = [];
+  for (let i = 0; i < slotCount; i++) {
+    const values = variants.map((v) => splitVariantParts(v)[i]).filter(Boolean) as string[];
+    const cat = classifyAxis(values);
+    axes.push(cat === "Unknown" ? (slotCount === 1 ? "Option" : `Variant Option ${i + 1}`) : cat);
+  }
+  // Dedupe repeats
+  const seen = new Map<string, number>();
+  return axes.map((a) => {
+    const n = (seen.get(a) || 0) + 1;
+    seen.set(a, n);
+    return n === 1 ? a : `${a} ${n}`;
+  });
 }
 
 function variantOptionMap(variant: any, axes: string[]) {
-  const label = String(variant?.variantKey || variant?.variantNameEn || variant?.variantSku || variant?.vid || "Option").trim();
-  const parts = label.split(/[-,/|]+/).map((p) => p.trim()).filter(Boolean);
+  const parts = splitVariantParts(variant);
+  const label = parts.join(" / ") || String(variant?.variantSku || variant?.vid || "Option");
   const values = parts.length === axes.length ? parts : axes.length === 1 ? [label] : axes.map((_, i) => parts[i] || label);
   return Object.fromEntries(axes.map((axis, i) => [axis, values[i] || label]));
 }
@@ -118,7 +135,7 @@ function ProductDetailPage() {
   const ebayFee = preFeePrice * EBAY_FEE_PCT;
   const finalSell = preFeePrice + ebayFee;
   const profit = desiredProfit;
-  const axes = useMemo(() => variantAxes(p?.productKeyEn, variants[0]), [p?.productKeyEn, variants]);
+  const axes = useMemo(() => deriveAxes(variants), [variants]);
   const selectedOptions = activeVariant ? variantOptionMap(activeVariant, axes) : {};
   const priceForVariant = (rawCost: unknown) => {
     const variantCost = Number(rawCost ?? itemCost) || itemCost;

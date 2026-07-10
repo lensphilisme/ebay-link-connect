@@ -15,6 +15,7 @@ import { AlertCircle, ChevronDown, FileEdit, Loader2, MoreHorizontal, Rocket, Se
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Progress } from "@/components/ui/progress";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "sonner";
 
@@ -90,14 +91,39 @@ function DraftsPage() {
     onError: (e: Error) => toast.error(e.message),
   });
 
+  const [pushProgress, setPushProgress] = useState<{ done: number; total: number; current?: string } | null>(null);
   const push = useMutation({
-    mutationFn: async (ids: string[]) => pushFn({ data: { draftIds: ids } }),
+    mutationFn: async (ids: string[]) => {
+      setPushProgress({ done: 0, total: ids.length });
+      const rows: any[] = [];
+      for (let i = 0; i < ids.length; i++) {
+        const id = ids[i];
+        const draft = drafts.find((d: any) => d.id === id);
+        setPushProgress({ done: i, total: ids.length, current: draft?.title });
+        try {
+          const res = await pushFn({ data: { draftIds: [id] } });
+          rows.push(...(res || []));
+        } catch (e) {
+          const message = e instanceof Error ? e.message : String(e);
+          rows.push({ draftId: id, ok: false, error: message });
+        }
+      }
+      setPushProgress({ done: ids.length, total: ids.length });
+      return rows;
+    },
     onSuccess: (rows: any[]) => {
-      toast.success(`Pushed ${rows.filter((r) => r.ok).length}/${rows.length} draft(s)`);
+      const okCount = rows.filter((r) => r.ok).length;
+      const failed = rows.filter((r) => !r.ok);
+      toast.success(`Pushed ${okCount}/${rows.length} draft(s)`);
+      const feedbackLock = failed.find((r) => /low feedback rating/i.test(String(r.error || "")));
+      if (feedbackLock) {
+        toast.error("eBay blocked Fixed Price listings on this account (low feedback rating). Build feedback with a few small purchases/sales, or contact eBay to lift the limit.", { duration: 12000 });
+      }
       setSelected({});
       refetch();
+      setTimeout(() => setPushProgress(null), 1500);
     },
-    onError: (e: Error) => toast.error(e.message),
+    onError: (e: Error) => { toast.error(e.message); setPushProgress(null); },
   });
 
   const bulkDelete = useMutation({
@@ -126,6 +152,22 @@ function DraftsPage() {
         <Button size="sm" disabled={!selectedIds.length || push.isPending} onClick={() => push.mutate(selectedIds)}><Rocket className="h-4 w-4 mr-1" />Push</Button>
         <Button size="sm" disabled={!selectedIds.length || bulkDelete.isPending} variant="destructive" onClick={() => bulkDelete.mutate(selectedIds)}><Trash2 className="h-4 w-4 mr-1" />Delete</Button>
       </div>
+
+      {pushProgress && (
+        <Card className="mb-3 p-3">
+          <div className="flex items-center justify-between mb-1 text-xs">
+            <div className="flex items-center gap-2 min-w-0">
+              <Rocket className="h-3.5 w-3.5 text-primary shrink-0" />
+              <span className="font-medium">Pushing to eBay</span>
+              {pushProgress.current && <span className="text-muted-foreground truncate">· {truncate(pushProgress.current, 40)}</span>}
+            </div>
+            <span className="text-muted-foreground tabular-nums shrink-0">{pushProgress.done}/{pushProgress.total}</span>
+          </div>
+          <Progress value={pushProgress.total ? (pushProgress.done / pushProgress.total) * 100 : 0} className="h-2" />
+        </Card>
+      )}
+
+
 
       <Card className="overflow-hidden border shadow-sm">
         {isLoading ? <div className="p-10 text-center"><Loader2 className="h-5 w-5 animate-spin mx-auto" /></div> : drafts.length === 0 ? (
