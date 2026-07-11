@@ -4,14 +4,14 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { optimizeDraftCopyWithAi, optimizeDraftWithAi, repairDraftForEbay } from "@/lib/ai.functions";
-import { aiDeepCategorySuggest, pushDraftsToEbay, suggestEbayCategories } from "@/lib/ebay.functions";
+import { aiDeepCategorySuggest, pushDraftsToEbay, stripBanAmazon, suggestEbayCategories } from "@/lib/ebay.functions";
 import { supabase } from "@/integrations/supabase/client";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { AlertCircle, ChevronDown, FileEdit, Loader2, MoreHorizontal, Rocket, Search, Sparkles, Trash2, Wrench } from "lucide-react";
+import { AlertCircle, ChevronDown, Copy, FileEdit, Loader2, MoreHorizontal, Rocket, Search, Sparkles, Trash2, Wrench } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -60,6 +60,32 @@ function DraftsPage() {
   });
   const selectedIds = useMemo(() => Object.keys(selected).filter((id) => selected[id]), [selected]);
   const failedIds = useMemo(() => drafts.filter((d: any) => d.status === "failed").map((d: any) => d.id), [drafts]);
+  const allSelected = drafts.length > 0 && selectedIds.length === drafts.length;
+
+  // Duplicate detection: group drafts sharing the same primary image (a strong
+  // "same product from different supplier / rewritten title" signal). Keep the
+  // cheapest by raw CJ cost (profit.item_cost), not the marked-up price.
+  const duplicateInfo = useMemo(() => {
+    const groups = new Map<string, any[]>();
+    for (const d of drafts) {
+      const img = (Array.isArray(d.images) ? d.images[0] : "") || "";
+      const key = String(img).split("?")[0].split("/").pop()?.toLowerCase() || "";
+      if (!key || key.length < 5) continue;
+      const arr = groups.get(key) || [];
+      arr.push(d);
+      groups.set(key, arr);
+    }
+    const dupGroups = Array.from(groups.values()).filter((g) => g.length > 1);
+    const cost = (d: any) => Number(d?.profit?.item_cost ?? d?.price ?? 0);
+    const flagged = new Set<string>();
+    const keep = new Set<string>();
+    for (const g of dupGroups) {
+      const sorted = [...g].sort((a, b) => cost(a) - cost(b));
+      keep.add(sorted[0].id);
+      for (const d of sorted.slice(1)) flagged.add(d.id);
+    }
+    return { groupCount: dupGroups.length, flagged, keep };
+  }, [drafts]);
 
   const optimize = useMutation({
     mutationFn: async (ids: string[]) => { for (const id of ids) await optimizeFn({ data: { draftId: id } }); },
@@ -144,17 +170,69 @@ function DraftsPage() {
     if (error) toast.error(error.message); else refetch();
   }
 
+  function toggleAll() {
+    if (allSelected) setSelected({});
+    else setSelected(Object.fromEntries(drafts.map((d: any) => [d.id, true])));
+  }
+
+  // Auto AI-Fill: when the user just bulk-sent products from research, the
+  // products page dropped their new draft IDs in sessionStorage. We fire AI
+  // Fill on them so users can go straight to Push without extra clicks.
+  useEffect(() => {
+    if (typeof window === "undefined" || drafts.length === 0) return;
+    let handle: any = null;
+    try {
+      const raw = sessionStorage.getItem("drafts-auto-fill");
+      if (!raw) return;
+      const { ids, at } = JSON.parse(raw);
+      if (!Array.isArray(ids) || Date.now() - Number(at || 0) > 5 * 60_000) { sessionStorage.removeItem("drafts-auto-fill"); return; }
+      const eligible = drafts.filter((d: any) => ids.includes(d.id) && (!d.item_specifics || Object.keys(d.item_specifics).length <= 2));
+      if (eligible.length === 0) { sessionStorage.removeItem("drafts-auto-fill"); return; }
+      sessionStorage.removeItem("drafts-auto-fill");
+      toast.info(`Auto AI Fill running on ${eligible.length} new draft${eligible.length === 1 ? "" : "s"}…`);
+      handle = setTimeout(() => optimize.mutate(eligible.map((d: any) => d.id)), 400);
+    } catch { /* ignore */ }
+    return () => { if (handle) clearTimeout(handle); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [drafts.length]);
+
+  const dedupKeepCheapest = () => {
+    const toDelete = Array.from(duplicateInfo.flagged);
+    if (toDelete.length === 0) { toast.info("No image duplicates found."); return; }
+    if (!window.confirm(`Delete ${toDelete.length} duplicate draft${toDelete.length === 1 ? "" : "s"} and keep the cheapest supplier for each group?`)) return;
+    bulkDelete.mutate(toDelete);
+  };
+
   return (
     <AppShell title="Drafts" subtitle="Compact queue for fixing, editing and bulk-pushing to eBay">
-      <div className="mb-3 flex flex-wrap gap-2">
-        <Button asChild variant="outline" size="sm"><Link to="/products"><Search className="h-4 w-4 mr-1" />Research</Link></Button>
-        <Button size="sm" disabled={!selectedIds.length || optimize.isPending} onClick={() => optimize.mutate(selectedIds)}><Sparkles className="h-4 w-4 mr-1" />AI Fill</Button>
-        <Button size="sm" disabled={!selectedIds.length || optimizeCopy.isPending} variant="outline" onClick={() => optimizeCopy.mutate(selectedIds)}><Sparkles className="h-4 w-4 mr-1" />AI Optimized</Button>
-        <Button size="sm" disabled={!selectedIds.length || repair.isPending} onClick={() => repair.mutate(selectedIds)}><Wrench className="h-4 w-4 mr-1" />Repair</Button>
-        <Button size="sm" disabled={!failedIds.length || repair.isPending} variant="outline" onClick={() => repair.mutate(failedIds)}><Wrench className="h-4 w-4 mr-1" />Repair failed</Button>
-        <Button size="sm" disabled={!selectedIds.length || push.isPending} onClick={() => push.mutate(selectedIds)}><Rocket className="h-4 w-4 mr-1" />Push</Button>
-        <Button size="sm" disabled={!selectedIds.length || bulkDelete.isPending} variant="destructive" onClick={() => bulkDelete.mutate(selectedIds)}><Trash2 className="h-4 w-4 mr-1" />Delete</Button>
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <button type="button" onClick={toggleAll} aria-label={allSelected ? "Deselect all" : "Select all"}
+          className={`h-8 w-8 shrink-0 rounded-md border flex items-center justify-center text-xs font-bold ${allSelected ? "bg-primary text-primary-foreground" : "bg-background"}`}>
+          {allSelected ? "✓" : ""}
+        </button>
+        <Button asChild variant="outline" size="icon" aria-label="Product research"><Link to="/products"><Search className="h-4 w-4" /></Link></Button>
+        <Button size="icon" disabled={!selectedIds.length || optimize.isPending} onClick={() => optimize.mutate(selectedIds)} aria-label="AI Fill item specifics"><Sparkles className="h-4 w-4" /></Button>
+        <Button size="icon" disabled={!selectedIds.length || optimizeCopy.isPending} variant="outline" onClick={() => optimizeCopy.mutate(selectedIds)} aria-label="AI Optimized copy"><Sparkles className="h-4 w-4" /></Button>
+        <Button size="icon" disabled={!selectedIds.length || repair.isPending} onClick={() => repair.mutate(selectedIds)} aria-label="Repair"><Wrench className="h-4 w-4" /></Button>
+        <Button size="icon" disabled={!failedIds.length || repair.isPending} variant="outline" onClick={() => repair.mutate(failedIds)} aria-label="Repair failed"><Wrench className="h-4 w-4 text-destructive" /></Button>
+        <Button size="icon" disabled={!selectedIds.length || push.isPending} onClick={() => push.mutate(selectedIds)} aria-label="Push to eBay"><Rocket className="h-4 w-4" /></Button>
+        <Button size="icon" variant="outline" onClick={dedupKeepCheapest} aria-label="Deduplicate by image · keep cheapest">
+          <Copy className="h-4 w-4" />
+          {duplicateInfo.groupCount > 0 && <span className="ml-1 text-[10px] font-bold">{duplicateInfo.flagged.size}</span>}
+        </Button>
+        <Button size="icon" disabled={!selectedIds.length || bulkDelete.isPending} variant="destructive" onClick={() => bulkDelete.mutate(selectedIds)} aria-label="Delete"><Trash2 className="h-4 w-4" /></Button>
+        <span className="ml-auto text-xs text-muted-foreground">{selectedIds.length}/{drafts.length} selected</span>
       </div>
+
+      {duplicateInfo.groupCount > 0 && (
+        <Card className="mb-3 p-3 border-amber-500/40 bg-amber-500/5">
+          <div className="flex items-center gap-2 text-xs">
+            <Copy className="h-4 w-4 text-amber-600" />
+            <span className="font-medium">Found {duplicateInfo.groupCount} duplicate group{duplicateInfo.groupCount === 1 ? "" : "s"} by image · {duplicateInfo.flagged.size} extra draft{duplicateInfo.flagged.size === 1 ? "" : "s"}</span>
+            <Button size="sm" variant="outline" className="ml-auto" onClick={dedupKeepCheapest}>Keep cheapest, delete rest</Button>
+          </div>
+        </Card>
+      )}
 
       {pushProgress && (
         <Card className="mb-3 p-3">
@@ -180,14 +258,20 @@ function DraftsPage() {
             {drafts.map((d: any) => {
               const checked = !!selected[d.id];
               const image = (Array.isArray(d.images) ? d.images[0] : undefined) || "";
+              const cleanTitle = stripBanAmazon(d.title || "");
+              const cleanDesc = stripBanAmazon(d.description || "");
+              const isDupExtra = duplicateInfo.flagged.has(d.id);
+              const isDupKeep = duplicateInfo.keep.has(d.id);
               return (
                 <Collapsible key={d.id}>
-                  <div className={`grid grid-cols-[42px_52px_1fr_auto] items-center gap-2 p-2 ${checked ? "bg-primary/5" : "bg-card"}`}>
+                  <div className={`grid grid-cols-[42px_52px_1fr_auto] items-center gap-2 p-2 ${checked ? "bg-primary/5" : isDupExtra ? "bg-amber-500/5" : "bg-card"}`}>
                     <button type="button" onClick={() => setSelected((s) => ({ ...s, [d.id]: !s[d.id] }))} className={`h-6 w-6 rounded-full border text-xs font-bold ${checked ? "bg-primary text-primary-foreground" : "bg-background"}`} aria-label={checked ? "Deselect draft" : "Select draft"}>{checked ? "✓" : ""}</button>
-                    <img src={image} alt={d.title || "Draft product"} className="h-12 w-12 rounded-md object-cover bg-muted" />
+                    <img src={image} alt={cleanTitle || "Draft product"} className="h-12 w-12 rounded-md object-cover bg-muted" />
                     <div className="min-w-0">
                       <div className="flex items-center gap-2 min-w-0">
-                        <span className="font-semibold text-sm truncate">{truncate(d.title, 22)}</span>
+                        <span className="font-semibold text-sm truncate">{truncate(cleanTitle, 22)}</span>
+                        {isDupExtra && <Badge variant="outline" className="shrink-0 text-[10px] border-amber-500 text-amber-700">dup</Badge>}
+                        {isDupKeep && <Badge variant="outline" className="shrink-0 text-[10px] border-emerald-500 text-emerald-700">keep</Badge>}
                         {d.status === "failed" ? <StatusErrorPopover draft={d} /> : <Badge variant="secondary" className="shrink-0 text-[10px]">{d.status}</Badge>}
                       </div>
                       <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
@@ -216,14 +300,23 @@ function DraftsPage() {
                     </div>
                   </div>
                   <CollapsibleContent>
-                    <div className="grid gap-3 border-t bg-muted/25 p-3 md:grid-cols-[1fr_280px]">
+                    <div className="grid gap-3 border-t bg-muted/25 p-3 md:grid-cols-[1fr_320px]">
                       <div className="min-w-0 space-y-2">
-                        <div className="text-sm font-medium break-words">{d.title}</div>
-                        <div className="line-clamp-3 text-xs text-muted-foreground break-words">{d.description || "No description yet."}</div>
+                        <div className="text-sm font-medium break-words">{cleanTitle}</div>
+                        <div className="line-clamp-3 text-xs text-muted-foreground break-words">{cleanDesc || "No description yet."}</div>
                       </div>
-                      <div className="space-y-2">
+                      <div className="space-y-2 min-w-0">
                         <Input value={d.category_id || ""} onChange={(e) => updateDraft(d.id, { category_id: e.target.value })} placeholder="eBay category ID" className="h-8 text-xs" />
-                        {suggestions[d.id]?.slice(0, 3).map((c) => <button key={c.categoryId} className="block w-full truncate text-left text-xs text-primary hover:underline" onClick={() => updateDraft(d.id, { category_id: c.categoryId })}>{c.path}</button>)}
+                        {(suggestions[d.id] || []).slice(0, 3).map((c) => (
+                          <button key={c.categoryId}
+                            className={`block w-full text-left text-xs rounded border px-2 py-1 leading-snug break-words whitespace-normal hover:bg-primary/5 ${d.category_id === c.categoryId ? "border-primary bg-primary/10" : "border-border"}`}
+                            onClick={() => updateDraft(d.id, { category_id: c.categoryId })}
+                            title={c.path}
+                          >
+                            {c.path}
+                          </button>
+                        ))}
+                        {!suggestions[d.id] && !d.category_id && <p className="text-[10px] text-muted-foreground">Tap ⋯ → eBay category suggest</p>}
                       </div>
                     </div>
                   </CollapsibleContent>
