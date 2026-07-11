@@ -157,7 +157,7 @@ export const bulkSendCjToDrafts = createServerFn({ method: "POST" })
               const q = buildCleanCategoryQuery({ title, cjCategoryName });
               const rows = await getCategorySuggestions(ebayToken, q, "EBAY_US");
               const auto = isAutomotiveSignal(q, cjCategoryName);
-              const filtered = auto ? rows.filter((r) => /ebay motors|parts\s*&\s*accessories/i.test(r.path)) : rows;
+              const filtered = auto ? rows.filter((r: { path: string }) => /ebay motors|parts\s*&\s*accessories/i.test(r.path)) : rows;
               const pick = (filtered.length ? filtered : rows)[0];
               if (pick) { categoryId = pick.categoryId; categoryPath = pick.path; }
             } catch { /* leave blank; user can pick manually */ }
