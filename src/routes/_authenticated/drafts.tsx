@@ -80,7 +80,10 @@ function DraftsPage() {
   });
 
   const suggest = useMutation({
-    mutationFn: async (draft: any) => ({ id: draft.id, rows: await suggestFn({ data: { q: draft.title } }) }),
+    mutationFn: async (draft: any) => ({
+      id: draft.id,
+      rows: await suggestFn({ data: { title: draft.title, cjCategoryName: draft.profit?.cj_category_name ?? null } }),
+    }),
     onSuccess: ({ id, rows }) => setSuggestions((s) => ({ ...s, [id]: rows })),
     onError: (e: Error) => toast.error(e.message),
   });
