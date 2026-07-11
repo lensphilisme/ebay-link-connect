@@ -397,22 +397,39 @@ export const suggestEbayCategories = createServerFn({ method: "POST" })
   .handler(async ({ data, context }: any) => {
     const token = await getFreshEbayToken(context.supabase, context.userId);
     const marketplaceId = data.marketplaceId ?? "EBAY_US";
-    const q = buildCleanCategoryQuery({
-      title: data.title ?? data.q ?? "",
-      cjCategoryName: data.cjCategoryName ?? null,
-    });
-    console.log("[category-suggest] raw=", data.title ?? data.q, "cjCat=", data.cjCategoryName, "→ q=", q);
-    let rows = await getCategorySuggestions(token, q, marketplaceId);
-    if (isAutomotiveSignal(q, data.cjCategoryName)) {
-      const filtered = filterAutomotive(rows);
-      if (filtered.length === 0) {
-        console.log("[category-suggest] automotive filter removed all rows; retrying with ' car part'");
-        rows = await getCategorySuggestions(token, `${q} car part`, marketplaceId);
-        rows = filterAutomotive(rows);
-      } else {
-        rows = filtered;
+    const rawTitle = String(data.title ?? data.q ?? "").trim();
+    const cleaned = buildCleanCategoryQuery({ title: rawTitle, cjCategoryName: data.cjCategoryName ?? null });
+
+    // Ordered candidate queries — try each until eBay returns rows.
+    // 1. cleaned (CJ category tail OR scrubbed title) — best signal.
+    // 2. cleaned title only (ignore CJ category which may be too broad).
+    // 3. raw title truncated — last resort so we always return something.
+    const titleOnly = buildCleanCategoryQuery({ title: rawTitle, cjCategoryName: null });
+    const rawFallback = rawTitle.slice(0, 80);
+    const attempts = Array.from(new Set([cleaned, titleOnly, rawFallback].filter(Boolean)));
+
+    const automotive = isAutomotiveSignal(cleaned, data.cjCategoryName);
+    let rows: Array<{ categoryId: string; categoryName: string; path: string }> = [];
+    let usedQ = "";
+    for (const q of attempts) {
+      try {
+        const r = await getCategorySuggestions(token, q, marketplaceId);
+        const filtered = automotive ? filterAutomotive(r) : r;
+        const chosen = filtered.length ? filtered : r; // only fall back to unfiltered when automotive filter blanks the list
+        if (chosen.length > 0) { rows = chosen; usedQ = q; break; }
+      } catch (e) {
+        console.warn("[category-suggest] attempt failed q=", q, e instanceof Error ? e.message : e);
       }
     }
+    // Automotive nudge: if we still have nothing, try appending " car part".
+    if (rows.length === 0 && automotive) {
+      try {
+        const r = await getCategorySuggestions(token, `${cleaned} car part`, marketplaceId);
+        rows = filterAutomotive(r).length ? filterAutomotive(r) : r;
+        usedQ = `${cleaned} car part`;
+      } catch { /* give up */ }
+    }
+    console.log("[category-suggest] raw=", rawTitle, "cjCat=", data.cjCategoryName, "→ usedQ=", usedQ, "rows=", rows.length);
     return rows;
   });
 
