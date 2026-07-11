@@ -15,6 +15,8 @@ import {
   type CjCategoryTree,
   type CjWarehouse,
 } from "./cj.server";
+import { stripBanAmazon, buildCleanCategoryQuery, isAutomotiveSignal } from "./ebay.functions";
+import { getCategorySuggestions, getFreshEbayToken } from "./ebay.server";
 
 async function tok(ctx: any) {
   return getUserCjToken(ctx.supabase, ctx.userId);
@@ -108,7 +110,11 @@ export const bulkSendCjToDrafts = createServerFn({ method: "POST" })
     const markupPct = Number(rule?.markup_percent ?? 50);
     const feePct = Number(rule?.ebay_fee_buffer_percent ?? 17) / 100;
 
-    const results: { pid: string; ok: boolean; carrier?: string; shipping?: number; error?: string }[] = [];
+    // Best-effort: fetch an eBay token once so we can auto-suggest a category per draft.
+    let ebayToken: string | null = null;
+    try { ebayToken = await getFreshEbayToken(context.supabase, context.userId); } catch { ebayToken = null; }
+
+    const results: { pid: string; ok: boolean; carrier?: string; shipping?: number; error?: string; draftId?: string; categoryId?: string | null }[] = [];
     // Fetch details/freight in small parallel batches to keep it fast without hammering CJ.
     const batchSize = 4;
     for (let i = 0; i < pids.length; i += batchSize) {
@@ -139,8 +145,24 @@ export const bulkSendCjToDrafts = createServerFn({ method: "POST" })
           const preFee = landed + desiredProfit;
           const ebayFee = preFee * feePct;
           const finalSell = preFee + ebayFee;
-          const title = String(detail?.productNameEn || "").slice(0, 80);
+          const cjCategoryName = detail?.categoryName || null;
+          const title = stripBanAmazon(String(detail?.productNameEn || "")).slice(0, 80);
           const images = [detail?.bigImage, detail?.productImage, ...(detail?.productImageSet || [])].filter(Boolean).slice(0, 12);
+
+          // Auto-suggest eBay category so drafts are ready to push.
+          let categoryId: string | null = null;
+          let categoryPath: string | null = null;
+          if (ebayToken) {
+            try {
+              const q = buildCleanCategoryQuery({ title, cjCategoryName });
+              const rows = await getCategorySuggestions(ebayToken, q, "EBAY_US");
+              const auto = isAutomotiveSignal(q, cjCategoryName);
+              const filtered = auto ? rows.filter((r) => /ebay motors|parts\s*&\s*accessories/i.test(r.path)) : rows;
+              const pick = (filtered.length ? filtered : rows)[0];
+              if (pick) { categoryId = pick.categoryId; categoryPath = pick.path; }
+            } catch { /* leave blank; user can pick manually */ }
+          }
+
           const row = {
             user_id: context.userId,
             cj_product_id: pid,
@@ -149,8 +171,9 @@ export const bulkSendCjToDrafts = createServerFn({ method: "POST" })
             title,
             price: Number(finalSell.toFixed(2)),
             images,
-            description: detail?.description ?? "",
+            description: stripBanAmazon(detail?.description ?? ""),
             status: "pending" as const,
+            category_id: categoryId,
             item_specifics: { Brand: "Unbranded", Condition: "New" },
             profit: {
               item_cost: itemCost,
@@ -165,12 +188,17 @@ export const bulkSendCjToDrafts = createServerFn({ method: "POST" })
               end_country: endCountry,
               start_country: "CN",
               product_key: detail?.productKeyEn || null,
-              cj_category_name: detail?.categoryName || null,
+              cj_category_name: cjCategoryName,
+              ebay_category_path: categoryPath,
               auto_quoted: true,
             },
           };
-          await context.supabase.from("listing_drafts").upsert(row, { onConflict: "user_id,cj_product_id", ignoreDuplicates: false });
-          return { pid, ok: true, carrier: carrierName || undefined, shipping: Number(shipping.toFixed(2)) };
+          const { data: saved } = await context.supabase
+            .from("listing_drafts")
+            .upsert(row, { onConflict: "user_id,cj_product_id", ignoreDuplicates: false })
+            .select("id")
+            .maybeSingle();
+          return { pid, ok: true, carrier: carrierName || undefined, shipping: Number(shipping.toFixed(2)), draftId: saved?.id, categoryId };
         } catch (e) {
           return { pid, ok: false, error: e instanceof Error ? e.message : String(e) };
         }
