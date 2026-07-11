@@ -10,7 +10,10 @@ import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Search, Loader2, ChevronLeft, ChevronRight, FileEdit, FileSpreadsheet } from "lucide-react";
+import { Search, Loader2, ChevronLeft, ChevronRight, FileEdit, FileSpreadsheet, Check, ChevronsUpDown, X } from "lucide-react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
+import { cn } from "@/lib/utils";
 import { exportProductsToFbXlsx } from "@/lib/fb-marketplace";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
@@ -27,11 +30,14 @@ function ProductsPage() {
     try { return JSON.parse(sessionStorage.getItem("cj-products-search") || "null"); } catch { return null; }
   })();
   const [keyword, setKeyword] = useState<string>(initial?.keyword ?? "");
-  const [query, setQuery] = useState<{ keyword: string; pageNum: number; pageSize: number; categoryId?: string; countryCode?: string }>(
+  const [query, setQuery] = useState<{ keyword: string; pageNum: number; pageSize: number; categoryId?: string; countryCode?: string; minPrice?: number; maxPrice?: number }>(
     initial?.query ?? { keyword: "", pageNum: 1, pageSize: 20 },
   );
   const [categoryId, setCategoryId] = useState<string>(initial?.categoryId ?? "all");
   const [countryCode, setCountryCode] = useState<string>(initial?.countryCode ?? "all");
+  const [minPrice, setMinPrice] = useState<string>(initial?.minPrice ?? "");
+  const [maxPrice, setMaxPrice] = useState<string>(initial?.maxPrice ?? "");
+  const [catOpen, setCatOpen] = useState(false);
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const navigate = useNavigate();
 
