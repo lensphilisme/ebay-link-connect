@@ -258,14 +258,20 @@ function DraftsPage() {
             {drafts.map((d: any) => {
               const checked = !!selected[d.id];
               const image = (Array.isArray(d.images) ? d.images[0] : undefined) || "";
+              const cleanTitle = stripBanAmazon(d.title || "");
+              const cleanDesc = stripBanAmazon(d.description || "");
+              const isDupExtra = duplicateInfo.flagged.has(d.id);
+              const isDupKeep = duplicateInfo.keep.has(d.id);
               return (
                 <Collapsible key={d.id}>
-                  <div className={`grid grid-cols-[42px_52px_1fr_auto] items-center gap-2 p-2 ${checked ? "bg-primary/5" : "bg-card"}`}>
+                  <div className={`grid grid-cols-[42px_52px_1fr_auto] items-center gap-2 p-2 ${checked ? "bg-primary/5" : isDupExtra ? "bg-amber-500/5" : "bg-card"}`}>
                     <button type="button" onClick={() => setSelected((s) => ({ ...s, [d.id]: !s[d.id] }))} className={`h-6 w-6 rounded-full border text-xs font-bold ${checked ? "bg-primary text-primary-foreground" : "bg-background"}`} aria-label={checked ? "Deselect draft" : "Select draft"}>{checked ? "✓" : ""}</button>
-                    <img src={image} alt={d.title || "Draft product"} className="h-12 w-12 rounded-md object-cover bg-muted" />
+                    <img src={image} alt={cleanTitle || "Draft product"} className="h-12 w-12 rounded-md object-cover bg-muted" />
                     <div className="min-w-0">
                       <div className="flex items-center gap-2 min-w-0">
-                        <span className="font-semibold text-sm truncate">{truncate(d.title, 22)}</span>
+                        <span className="font-semibold text-sm truncate">{truncate(cleanTitle, 22)}</span>
+                        {isDupExtra && <Badge variant="outline" className="shrink-0 text-[10px] border-amber-500 text-amber-700">dup</Badge>}
+                        {isDupKeep && <Badge variant="outline" className="shrink-0 text-[10px] border-emerald-500 text-emerald-700">keep</Badge>}
                         {d.status === "failed" ? <StatusErrorPopover draft={d} /> : <Badge variant="secondary" className="shrink-0 text-[10px]">{d.status}</Badge>}
                       </div>
                       <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
@@ -294,14 +300,23 @@ function DraftsPage() {
                     </div>
                   </div>
                   <CollapsibleContent>
-                    <div className="grid gap-3 border-t bg-muted/25 p-3 md:grid-cols-[1fr_280px]">
+                    <div className="grid gap-3 border-t bg-muted/25 p-3 md:grid-cols-[1fr_320px]">
                       <div className="min-w-0 space-y-2">
-                        <div className="text-sm font-medium break-words">{d.title}</div>
-                        <div className="line-clamp-3 text-xs text-muted-foreground break-words">{d.description || "No description yet."}</div>
+                        <div className="text-sm font-medium break-words">{cleanTitle}</div>
+                        <div className="line-clamp-3 text-xs text-muted-foreground break-words">{cleanDesc || "No description yet."}</div>
                       </div>
-                      <div className="space-y-2">
+                      <div className="space-y-2 min-w-0">
                         <Input value={d.category_id || ""} onChange={(e) => updateDraft(d.id, { category_id: e.target.value })} placeholder="eBay category ID" className="h-8 text-xs" />
-                        {suggestions[d.id]?.slice(0, 3).map((c) => <button key={c.categoryId} className="block w-full truncate text-left text-xs text-primary hover:underline" onClick={() => updateDraft(d.id, { category_id: c.categoryId })}>{c.path}</button>)}
+                        {(suggestions[d.id] || []).slice(0, 3).map((c) => (
+                          <button key={c.categoryId}
+                            className={`block w-full text-left text-xs rounded border px-2 py-1 leading-snug break-words whitespace-normal hover:bg-primary/5 ${d.category_id === c.categoryId ? "border-primary bg-primary/10" : "border-border"}`}
+                            onClick={() => updateDraft(d.id, { category_id: c.categoryId })}
+                            title={c.path}
+                          >
+                            {c.path}
+                          </button>
+                        ))}
+                        {!suggestions[d.id] && !d.category_id && <p className="text-[10px] text-muted-foreground">Tap ⋯ → eBay category suggest</p>}
                       </div>
                     </div>
                   </CollapsibleContent>
