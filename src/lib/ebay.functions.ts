@@ -311,12 +311,109 @@ export const syncEbayListings = createServerFn({ method: "POST" })
   });
 
 
+// Marketing noise that pollutes CJ titles and misleads eBay's text match.
+const CATEGORY_QUERY_STOPWORDS = new Set([
+  "universal", "hot", "sale", "new", "kit", "sets", "set", "high", "quality",
+  "for", "pcs", "pc", "pack", "packs", "piece", "pieces", "the", "and", "with",
+  "of", "in", "on", "a", "an", "to", "premium", "professional", "pro", "luxury",
+  "portable", "foldable", "adjustable", "multi", "multifunctional", "durable",
+  "waterproof", "wireless", "rechargeable", "mini", "large", "small", "medium",
+  "big", "hd", "led", "usb", "diy", "fashion", "style", "styles", "trendy",
+  "cute", "lovely", "creative", "classic", "modern", "vintage", "brand",
+  "unbranded", "oem", "original", "genuine", "eu", "us", "uk", "au", "cn",
+  "free", "shipping", "gift", "gifts", "party", "home", "outdoor", "indoor",
+  "size", "color", "colour", "black", "white", "red", "blue", "green", "pink",
+  "gold", "silver", "grey", "gray", "yellow", "brown", "purple", "orange",
+]);
+
+const AUTOMOTIVE_KEYWORDS = [
+  "car", "cars", "auto", "automotive", "truck", "vehicle", "motorcycle",
+  "motorbike", "bike", "atv", "utv", "suv", "van", "bus", "engine", "exhaust",
+  "muffler", "header", "headers", "manifold", "catalytic", "brake", "brakes",
+  "rotor", "caliper", "clutch", "transmission", "carburetor", "carb",
+  "spark plug", "piston", "cylinder head", "intake", "turbo", "supercharger",
+  "radiator", "alternator", "starter motor", "axle", "differential",
+  "suspension", "shock", "strut", "steering", "tie rod", "control arm",
+  "cv joint", "wheel bearing", "fuel injector", "oxygen sensor", "abs sensor",
+  "throttle body", "camshaft", "crankshaft", "timing belt", "timing chain",
+  "head gasket", "oil pan", "valve cover", "cooling fan",
+];
+
+// Pure function: build a clean query string for eBay Taxonomy search.
+// Prefers the CJ-provided category name (much cleaner + closer to eBay's tree)
+// and falls back to a scrubbed version of the raw title.
+export function buildCleanCategoryQuery(input: {
+  title?: string | null;
+  cjCategoryName?: string | null;
+}): string {
+  const cjCat = String(input.cjCategoryName ?? "").trim();
+  if (cjCat) {
+    // CJ paths look like "Home / Kitchen / Storage Boxes". Take the last two
+    // segments — most specific + parent — that's what eBay's fuzzy matcher likes.
+    const segments = cjCat.split(/[\/>|,]/).map((s) => s.trim()).filter(Boolean);
+    const tail = segments.slice(-2).join(" ");
+    if (tail) return tail.replace(/\s+/g, " ").slice(0, 80);
+  }
+  const raw = String(input.title ?? "");
+  const stripped = raw
+    .toLowerCase()
+    // strip emojis / symbols
+    .replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, " ")
+    // strip punctuation
+    .replace(/[^a-z0-9\s]/g, " ")
+    // strip 4-digit years
+    .replace(/\b(19|20)\d{2}\b/g, " ")
+    // strip size tokens like "12cm", "3.5in", "500ml"
+    .replace(/\b\d+(\.\d+)?\s?(mm|cm|m|in|inch|inches|ft|ml|l|oz|g|kg|lb|lbs|xl|xxl|xs|s|m|l)\b/g, " ")
+    // strip bare number+unit patterns like "10pcs", "2pack"
+    .replace(/\b\d+\s?(pcs|pc|pack|packs|piece|pieces|set|sets)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const meaningful: string[] = [];
+  for (const tok of stripped.split(" ")) {
+    if (!tok || tok.length < 2) continue;
+    if (/^\d+$/.test(tok)) continue;
+    if (CATEGORY_QUERY_STOPWORDS.has(tok)) continue;
+    meaningful.push(tok);
+    if (meaningful.length >= 5) break;
+  }
+  const cleaned = meaningful.slice(0, 5).join(" ");
+  return cleaned || raw.slice(0, 80);
+}
+
+export function isAutomotiveSignal(q: string, cjCategoryName?: string | null): boolean {
+  const hay = `${q} ${cjCategoryName ?? ""}`.toLowerCase();
+  if (/\b(motor|auto|vehicle|automotive|car\s+part|truck)\b/.test(hay)) return true;
+  return AUTOMOTIVE_KEYWORDS.some((kw) => new RegExp(`\\b${kw.replace(/\s+/g, "\\s+")}\\b`).test(hay));
+}
+
+function filterAutomotive(rows: Array<{ categoryId: string; categoryName: string; path: string }>) {
+  return rows.filter((r) => /ebay motors|parts\s*&\s*accessories/i.test(r.path));
+}
+
 export const suggestEbayCategories = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((data: { q: string; marketplaceId?: string }) => data)
+  .inputValidator((data: { q?: string; title?: string; cjCategoryName?: string | null; marketplaceId?: string }) => data)
   .handler(async ({ data, context }: any) => {
     const token = await getFreshEbayToken(context.supabase, context.userId);
-    return getCategorySuggestions(token, data.q, data.marketplaceId ?? "EBAY_US");
+    const marketplaceId = data.marketplaceId ?? "EBAY_US";
+    const q = buildCleanCategoryQuery({
+      title: data.title ?? data.q ?? "",
+      cjCategoryName: data.cjCategoryName ?? null,
+    });
+    console.log("[category-suggest] raw=", data.title ?? data.q, "cjCat=", data.cjCategoryName, "→ q=", q);
+    let rows = await getCategorySuggestions(token, q, marketplaceId);
+    if (isAutomotiveSignal(q, data.cjCategoryName)) {
+      const filtered = filterAutomotive(rows);
+      if (filtered.length === 0) {
+        console.log("[category-suggest] automotive filter removed all rows; retrying with ' car part'");
+        rows = await getCategorySuggestions(token, `${q} car part`, marketplaceId);
+        rows = filterAutomotive(rows);
+      } else {
+        rows = filtered;
+      }
+    }
+    return rows;
   });
 
 export const pushDraftsToEbay = createServerFn({ method: "POST" })

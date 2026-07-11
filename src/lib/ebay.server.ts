@@ -245,7 +245,12 @@ export async function getCategorySuggestions(accessToken: string, q: string, mar
   });
   const json = await res.json();
   if (!res.ok) throw new Error(`eBay category suggestion error: ${json.message || res.statusText}`);
-  return (json.categorySuggestions || []).map((s: any) => ({
+  // eBay's get_category_suggestions is defined to return leaf categories only.
+  // Log a warning if that ever changes so we notice regressions upstream.
+  const raw = json.categorySuggestions || [];
+  const nonLeaf = raw.filter((s: any) => s.category?.leafCategoryTreeNode === false);
+  if (nonLeaf.length > 0) console.warn(`[getCategorySuggestions] eBay returned ${nonLeaf.length} non-leaf suggestion(s) for q="${q}"`);
+  return raw.map((s: any) => ({
     categoryId: s.category?.categoryId,
     categoryName: s.category?.categoryName,
     path: (s.categoryTreeNodeAncestors || []).map((a: any) => a.categoryName).concat(s.category?.categoryName).filter(Boolean).join(" > "),
