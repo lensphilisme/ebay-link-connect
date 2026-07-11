@@ -118,8 +118,12 @@ function ProductsPage() {
     },
     onSuccess: (res: any) => {
       const failed = (res.results || []).filter((r: any) => !r.ok).length;
-      toast.success(`Sent ${res.ok}/${res.total} to drafts with auto shipping quote${failed ? ` · ${failed} failed` : ""}`);
+      const draftIds = (res.results || []).filter((r: any) => r.ok && r.draftId).map((r: any) => r.draftId);
+      toast.success(`Sent ${res.ok}/${res.total} to drafts with auto shipping quote + eBay category${failed ? ` · ${failed} failed` : ""}`);
       setSelected({});
+      if (typeof window !== "undefined" && draftIds.length) {
+        try { sessionStorage.setItem("drafts-auto-fill", JSON.stringify({ ids: draftIds, at: Date.now() })); } catch { /* ignore */ }
+      }
       navigate({ to: "/drafts" });
     },
     onError: (e: Error) => toast.error(e.message),
