@@ -60,6 +60,32 @@ function DraftsPage() {
   });
   const selectedIds = useMemo(() => Object.keys(selected).filter((id) => selected[id]), [selected]);
   const failedIds = useMemo(() => drafts.filter((d: any) => d.status === "failed").map((d: any) => d.id), [drafts]);
+  const allSelected = drafts.length > 0 && selectedIds.length === drafts.length;
+
+  // Duplicate detection: group drafts sharing the same primary image (a strong
+  // "same product from different supplier / rewritten title" signal). Keep the
+  // cheapest by raw CJ cost (profit.item_cost), not the marked-up price.
+  const duplicateInfo = useMemo(() => {
+    const groups = new Map<string, any[]>();
+    for (const d of drafts) {
+      const img = (Array.isArray(d.images) ? d.images[0] : "") || "";
+      const key = String(img).split("?")[0].split("/").pop()?.toLowerCase() || "";
+      if (!key || key.length < 5) continue;
+      const arr = groups.get(key) || [];
+      arr.push(d);
+      groups.set(key, arr);
+    }
+    const dupGroups = Array.from(groups.values()).filter((g) => g.length > 1);
+    const cost = (d: any) => Number(d?.profit?.item_cost ?? d?.price ?? 0);
+    const flagged = new Set<string>();
+    const keep = new Set<string>();
+    for (const g of dupGroups) {
+      const sorted = [...g].sort((a, b) => cost(a) - cost(b));
+      keep.add(sorted[0].id);
+      for (const d of sorted.slice(1)) flagged.add(d.id);
+    }
+    return { groupCount: dupGroups.length, flagged, keep };
+  }, [drafts]);
 
   const optimize = useMutation({
     mutationFn: async (ids: string[]) => { for (const id of ids) await optimizeFn({ data: { draftId: id } }); },
