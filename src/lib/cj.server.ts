@@ -226,32 +226,46 @@ export async function cjSearchProducts(params: {
   maxPrice?: number;
 }, token?: string): Promise<CjListResponse> {
   const ids = Array.from(new Set((params.categoryIds ?? []).filter(Boolean)));
-  // Multi-category: use CJ Product List V2 POST body with lv3categoryList.
+  const buildQs = (categoryId?: string, pageNum = params.pageNum ?? 1, pageSize = params.pageSize ?? 20) => {
+    const q = new URLSearchParams();
+    q.set("pageNum", String(pageNum));
+    q.set("pageSize", String(pageSize));
+    if (params.keyword) q.set("productNameEn", params.keyword);
+    if (categoryId) q.set("categoryId", categoryId);
+    if (params.countryCode) q.set("countryCode", params.countryCode);
+    if (params.minPrice != null) q.set("minPrice", String(params.minPrice));
+    if (params.maxPrice != null) q.set("maxPrice", String(params.maxPrice));
+    return q.toString();
+  };
+
+  // CJ /product/list is GET-only (POST returns error 16900202: "Request method
+  // 'POST' not supported"). For multi-category selection, fan out one GET per
+  // category in parallel and merge/dedupe by pid.
   if (ids.length > 1) {
-    const body: Record<string, unknown> = {
-      pageNum: params.pageNum ?? 1,
-      pageSize: params.pageSize ?? 20,
-      lv3categoryList: ids,
-    };
-    if (params.keyword) body.productNameEn = params.keyword;
-    if (params.countryCode) body.countryCode = params.countryCode;
-    if (params.minPrice != null) body.minPrice = params.minPrice;
-    if (params.maxPrice != null) body.maxPrice = params.maxPrice;
-    return cjFetch<CjListResponse>(`/product/list`, {
-      method: "POST",
-      body: JSON.stringify(body),
-    }, token);
+    const pageSize = params.pageSize ?? 20;
+    const perCat = Math.max(pageSize, 20);
+    const results = await Promise.all(
+      ids.map((id) => cjFetch<CjListResponse>(`/product/list?${buildQs(id, 1, perCat)}`, {}, token).catch(() => null)),
+    );
+    const seen = new Set<string>();
+    const merged: CjListItem[] = [];
+    let total = 0;
+    for (const r of results) {
+      if (!r) continue;
+      total += Number(r.total ?? 0);
+      for (const it of r.list ?? []) {
+        if (!it?.pid || seen.has(it.pid)) continue;
+        seen.add(it.pid);
+        merged.push(it);
+      }
+    }
+    const pageNum = params.pageNum ?? 1;
+    const start = (pageNum - 1) * pageSize;
+    return { pageNum, pageSize, total: total || merged.length, list: merged.slice(start, start + pageSize) };
   }
-  const q = new URLSearchParams();
-  q.set("pageNum", String(params.pageNum ?? 1));
-  q.set("pageSize", String(params.pageSize ?? 20));
-  if (params.keyword) q.set("productNameEn", params.keyword);
+
   const singleId = ids[0] || params.categoryId;
-  if (singleId) q.set("categoryId", singleId);
-  if (params.countryCode) q.set("countryCode", params.countryCode);
-  if (params.minPrice != null) q.set("minPrice", String(params.minPrice));
-  if (params.maxPrice != null) q.set("maxPrice", String(params.maxPrice));
-  return cjFetch<CjListResponse>(`/product/list?${q}`, {}, token);
+  return cjFetch<CjListResponse>(`/product/list?${buildQs(singleId)}`, {}, token);
 }
 
 export type CjVariant = {
