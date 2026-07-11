@@ -127,8 +127,8 @@ function ProductsPage() {
 
   return (
     <AppShell title="CJ Products" subtitle="Search inventory and send winners to your draft queue">
-      <form onSubmit={submit} className="flex flex-col md:flex-row gap-2 mb-4">
-        <div className="relative flex-1">
+      <form onSubmit={submit} className="grid grid-cols-2 md:flex md:flex-wrap gap-2 mb-4">
+        <div className="relative col-span-2 md:flex-1 md:min-w-[240px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
             value={keyword}
@@ -137,6 +137,8 @@ function ProductsPage() {
             className="pl-9"
           />
         </div>
+        <Input type="number" inputMode="decimal" min="0" step="0.01" placeholder="Min $" value={minPrice} onChange={(e) => setMinPrice(e.target.value)} className="md:w-24" />
+        <Input type="number" inputMode="decimal" min="0" step="0.01" placeholder="Max $" value={maxPrice} onChange={(e) => setMaxPrice(e.target.value)} className="md:w-24" />
         <Select value={countryCode} onValueChange={setCountryCode}>
           <SelectTrigger className="md:w-36"><SelectValue /></SelectTrigger>
           <SelectContent>
@@ -145,13 +147,34 @@ function ProductsPage() {
             <SelectItem value="US">US stock</SelectItem>
           </SelectContent>
         </Select>
-        <Select value={categoryId} onValueChange={setCategoryId}>
-          <SelectTrigger className="md:w-72"><SelectValue placeholder="CJ category tree" /></SelectTrigger>
-          <SelectContent className="max-h-80">
-            <SelectItem value="all">All CJ categories</SelectItem>
-            {flatCategories.map((c) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
-          </SelectContent>
-        </Select>
+        <Popover open={catOpen} onOpenChange={setCatOpen}>
+          <PopoverTrigger asChild>
+            <Button type="button" variant="outline" role="combobox" className="md:w-72 justify-between font-normal">
+              <span className="truncate">{categoryId === "all" ? "All CJ categories" : (activeCat?.name ?? "CJ category tree")}</span>
+              <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent className="w-[min(90vw,28rem)] p-0" align="start">
+            <Command>
+              <CommandInput placeholder="Type to search CJ categories…" />
+              <CommandList className="max-h-80">
+                <CommandEmpty>No category matches</CommandEmpty>
+                <CommandGroup>
+                  <CommandItem onSelect={() => { setCategoryId("all"); setCatOpen(false); }}>
+                    <Check className={cn("mr-2 h-4 w-4", categoryId === "all" ? "opacity-100" : "opacity-0")} />
+                    All CJ categories
+                  </CommandItem>
+                  {flatCategories.map((c) => (
+                    <CommandItem key={c.id} value={c.name} onSelect={() => { setCategoryId(c.id); setCatOpen(false); }}>
+                      <Check className={cn("mr-2 h-4 w-4", categoryId === c.id ? "opacity-100" : "opacity-0")} />
+                      <span className="truncate">{c.name}</span>
+                    </CommandItem>
+                  ))}
+                </CommandGroup>
+              </CommandList>
+            </Command>
+          </PopoverContent>
+        </Popover>
         <Select
           value={String(query.pageSize)}
           onValueChange={(v) => setQuery((q) => ({ ...q, pageSize: Number(v), pageNum: 1 }))}
@@ -164,6 +187,11 @@ function ProductsPage() {
         <Button type="submit" disabled={isFetching}>
           {isFetching ? <Loader2 className="h-4 w-4 animate-spin" /> : "Search"}
         </Button>
+        {(minPrice || maxPrice || categoryId !== "all") && (
+          <Button type="button" variant="ghost" size="sm" onClick={() => { setMinPrice(""); setMaxPrice(""); setCategoryId("all"); }}>
+            <X className="h-4 w-4 mr-1" /> Clear filters
+          </Button>
+        )}
       </form>
 
       {error ? (
