@@ -254,7 +254,25 @@ function ProductsPage() {
         </Card>
       ) : (
         <>
+          <div className="mb-3 flex items-center gap-2 text-sm">
+            <Checkbox
+              id="select-all-page"
+              checked={items.length > 0 && items.every((p) => selected[p.pid])}
+              onCheckedChange={(v) => {
+                setSelected((s) => {
+                  const next = { ...s };
+                  if (v) for (const p of items) next[p.pid] = true;
+                  else for (const p of items) delete next[p.pid];
+                  return next;
+                });
+              }}
+            />
+            <label htmlFor="select-all-page" className="cursor-pointer select-none text-muted-foreground">
+              Select all {items.length} on this page
+            </label>
+          </div>
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 md:gap-4">
+
             {items.map((p) => {
               const checked = !!selected[p.pid];
               const status = (statusMap as any)[p.pid];
