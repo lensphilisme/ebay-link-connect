@@ -165,6 +165,7 @@ export const bulkSendCjToDrafts = createServerFn({ method: "POST" })
               end_country: endCountry,
               start_country: "CN",
               product_key: detail?.productKeyEn || null,
+              cj_category_name: detail?.categoryName || null,
               auto_quoted: true,
             },
           };
