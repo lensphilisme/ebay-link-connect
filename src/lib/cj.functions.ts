@@ -15,8 +15,8 @@ import {
   type CjCategoryTree,
   type CjWarehouse,
 } from "./cj.server";
-import { stripBanAmazon, buildCleanCategoryQuery, isAutomotiveSignal } from "./ebay.functions";
-import { getCategorySuggestions, getFreshEbayToken } from "./ebay.server";
+import { stripBanAmazon, deepScanEbayCategory } from "./ebay.functions";
+import { getFreshEbayToken } from "./ebay.server";
 
 async function tok(ctx: any) {
   return getUserCjToken(ctx.supabase, ctx.userId);
