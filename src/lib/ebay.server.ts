@@ -342,8 +342,16 @@ function safeDescription(draft: any) {
   return sanitizeDescriptionHtml(draft.description, `${title}. ${bulletText}. New item. Review photos and selected option before checkout.`) || title;
 }
 
+function scrubBanPhrase(s: string) {
+  let out = s;
+  if (/the\s+sale\s+of\s+amazon/i.test(out)) out = out.replace(/\bBan\s[\s\S]*$/i, "");
+  out = out.replace(/\bban\s+the\s+sale\s+of\s+amazon\b/gi, "");
+  return out.replace(/\s+/g, " ").trim();
+}
+
 function safeTitle(value: unknown, fallback: unknown) {
-  return cleanText(value, cleanText(fallback, "eBay item")).slice(0, 80) || "eBay item";
+  const raw = cleanText(value, cleanText(fallback, "eBay item"));
+  return scrubBanPhrase(raw).slice(0, 80) || "eBay item";
 }
 
 function stripEmpty<T extends Record<string, any>>(obj: T): T {
