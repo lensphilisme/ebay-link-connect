@@ -1,7 +1,7 @@
-import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { AppShell } from "@/components/app-shell";
 import { useState, useMemo, useEffect } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { getCjCategories, searchCjProducts, bulkSendCjToDrafts } from "@/lib/cj.functions";
 import { Input } from "@/components/ui/input";
@@ -24,22 +24,30 @@ export const Route = createFileRoute("/_authenticated/products/")({
 
 const PAGE_SIZES = [10, 20, 40, 50, 100] as const;
 
+type Query = {
+  keyword: string;
+  pageNum: number;
+  pageSize: number;
+  categoryIds?: string[];
+  countryCode?: string;
+  minPrice?: number;
+  maxPrice?: number;
+};
+
 function ProductsPage() {
   const initial = (() => {
     if (typeof window === "undefined") return null;
     try { return JSON.parse(sessionStorage.getItem("cj-products-search") || "null"); } catch { return null; }
   })();
   const [keyword, setKeyword] = useState<string>(initial?.keyword ?? "");
-  const [query, setQuery] = useState<{ keyword: string; pageNum: number; pageSize: number; categoryId?: string; countryCode?: string; minPrice?: number; maxPrice?: number }>(
-    initial?.query ?? { keyword: "", pageNum: 1, pageSize: 20 },
-  );
-  const [categoryId, setCategoryId] = useState<string>(initial?.categoryId ?? "all");
+  const [query, setQuery] = useState<Query>(initial?.query ?? { keyword: "", pageNum: 1, pageSize: 20 });
+  const [categoryIds, setCategoryIds] = useState<string[]>(Array.isArray(initial?.categoryIds) ? initial.categoryIds : []);
   const [countryCode, setCountryCode] = useState<string>(initial?.countryCode ?? "all");
   const [minPrice, setMinPrice] = useState<string>(initial?.minPrice ?? "");
   const [maxPrice, setMaxPrice] = useState<string>(initial?.maxPrice ?? "");
   const [catOpen, setCatOpen] = useState(false);
   const [selected, setSelected] = useState<Record<string, boolean>>({});
-  const navigate = useNavigate();
+  const queryClient = useQueryClient();
 
   const searchFn = useServerFn(searchCjProducts);
   const categoriesFn = useServerFn(getCjCategories);
@@ -56,10 +64,15 @@ function ProductsPage() {
       })),
     ),
   ), [categories]);
+  const selectedCategories = useMemo(
+    () => categoryIds.map((id) => flatCategories.find((c) => c.id === id) ?? { id, name: id }),
+    [categoryIds, flatCategories],
+  );
+
   const { data, isFetching, error } = useQuery({
     queryKey: ["cj-search", query],
     queryFn: () => searchFn({ data: query }),
-    enabled: query.keyword.length > 0 || !!query.categoryId,
+    enabled: query.keyword.length > 0 || (query.categoryIds?.length ?? 0) > 0,
     staleTime: 60_000,
   });
 
@@ -68,13 +81,11 @@ function ProductsPage() {
   const totalPages = Math.max(1, Math.ceil(total / query.pageSize));
   const selectedIds = useMemo(() => Object.keys(selected).filter((k) => selected[k]), [selected]);
 
-  // Persist search state so navigation back to /products preserves results.
   useEffect(() => {
     if (typeof window === "undefined") return;
-    try { sessionStorage.setItem("cj-products-search", JSON.stringify({ keyword, query, categoryId, countryCode, minPrice, maxPrice })); } catch { /* ignore */ }
-  }, [keyword, query, categoryId, countryCode, minPrice, maxPrice]);
+    try { sessionStorage.setItem("cj-products-search", JSON.stringify({ keyword, query, categoryIds, countryCode, minPrice, maxPrice })); } catch { /* ignore */ }
+  }, [keyword, query, categoryIds, countryCode, minPrice, maxPrice]);
 
-  // Which visible products are already listed or in draft?
   const pids = items.map((p) => p.pid);
   const { data: statusMap = {} } = useQuery({
     queryKey: ["cj-listed-map", pids.join(",")],
@@ -91,14 +102,20 @@ function ProductsPage() {
     },
   });
 
+  const canSearch = keyword.trim().length > 0 || categoryIds.length > 0;
+
   function submit(e: React.FormEvent) {
     e.preventDefault();
+    if (!canSearch) {
+      toast.error("Please enter a keyword or select at least one category.");
+      return;
+    }
     const min = Number(minPrice);
     const max = Number(maxPrice);
     setQuery((q) => ({
       ...q,
       keyword,
-      categoryId: categoryId === "all" ? undefined : categoryId,
+      categoryIds: categoryIds.length ? categoryIds : undefined,
       countryCode: countryCode === "all" ? undefined : countryCode,
       minPrice: minPrice && !Number.isNaN(min) ? min : undefined,
       maxPrice: maxPrice && !Number.isNaN(max) ? max : undefined,
@@ -106,8 +123,6 @@ function ProductsPage() {
     }));
     setSelected({});
   }
-
-  const activeCat = flatCategories.find((c) => c.id === categoryId);
 
   const bulkDraftFn = useServerFn(bulkSendCjToDrafts);
   const bulkDraft = useMutation({
@@ -119,19 +134,20 @@ function ProductsPage() {
     onSuccess: (res: any) => {
       const failed = (res.results || []).filter((r: any) => !r.ok).length;
       const draftIds = (res.results || []).filter((r: any) => r.ok && r.draftId).map((r: any) => r.draftId);
-      toast.success(`Sent ${res.ok}/${res.total} to drafts with auto shipping quote + eBay category${failed ? ` · ${failed} failed` : ""}`);
+      toast.success(`Sent ${res.ok}/${res.total} to drafts${failed ? ` · ${failed} failed` : ""}. Stay here to keep browsing.`);
       setSelected({});
       if (typeof window !== "undefined" && draftIds.length) {
         try { sessionStorage.setItem("drafts-auto-fill", JSON.stringify({ ids: draftIds, at: Date.now() })); } catch { /* ignore */ }
       }
-      navigate({ to: "/drafts" });
+      // Refresh the "In draft / Listed" badges so users see status update in place.
+      queryClient.invalidateQueries({ queryKey: ["cj-listed-map"] });
     },
     onError: (e: Error) => toast.error(e.message),
   });
 
   return (
     <AppShell title="CJ Products" subtitle="Search inventory and send winners to your draft queue">
-      <form onSubmit={submit} className="grid grid-cols-2 md:flex md:flex-wrap gap-2 mb-4">
+      <form onSubmit={submit} className="grid grid-cols-2 md:flex md:flex-wrap gap-2 mb-3">
         <div className="relative col-span-2 md:flex-1 md:min-w-[240px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
@@ -154,28 +170,43 @@ function ProductsPage() {
         <Popover open={catOpen} onOpenChange={setCatOpen}>
           <PopoverTrigger asChild>
             <Button type="button" variant="outline" role="combobox" className="md:w-72 justify-between font-normal">
-              <span className="truncate">{categoryId === "all" ? "All CJ categories" : (activeCat?.name ?? "CJ category tree")}</span>
+              <span className="truncate">
+                {categoryIds.length === 0
+                  ? "Pick CJ categories…"
+                  : `${categoryIds.length} categor${categoryIds.length === 1 ? "y" : "ies"} selected`}
+              </span>
               <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
             </Button>
           </PopoverTrigger>
-          <PopoverContent className="w-[min(90vw,28rem)] p-0" align="start">
+          <PopoverContent className="w-[min(92vw,32rem)] p-0" align="start">
             <Command>
               <CommandInput placeholder="Type to search CJ categories…" />
               <CommandList className="max-h-80">
                 <CommandEmpty>No category matches</CommandEmpty>
                 <CommandGroup>
-                  <CommandItem onSelect={() => { setCategoryId("all"); setCatOpen(false); }}>
-                    <Check className={cn("mr-2 h-4 w-4", categoryId === "all" ? "opacity-100" : "opacity-0")} />
-                    All CJ categories
-                  </CommandItem>
-                  {flatCategories.map((c) => (
-                    <CommandItem key={c.id} value={c.name} onSelect={() => { setCategoryId(c.id); setCatOpen(false); }}>
-                      <Check className={cn("mr-2 h-4 w-4", categoryId === c.id ? "opacity-100" : "opacity-0")} />
-                      <span className="truncate">{c.name}</span>
-                    </CommandItem>
-                  ))}
+                  {flatCategories.map((c) => {
+                    const on = categoryIds.includes(c.id);
+                    return (
+                      <CommandItem
+                        key={c.id}
+                        value={c.name}
+                        onSelect={() => setCategoryIds((prev) => on ? prev.filter((x) => x !== c.id) : [...prev, c.id])}
+                      >
+                        <div className={cn("mr-2 flex h-4 w-4 items-center justify-center rounded border border-primary", on ? "bg-primary text-primary-foreground" : "opacity-70")}>
+                          {on && <Check className="h-3 w-3" />}
+                        </div>
+                        <span className="truncate">{c.name}</span>
+                      </CommandItem>
+                    );
+                  })}
                 </CommandGroup>
               </CommandList>
+              <div className="flex items-center justify-between border-t p-2 text-xs">
+                <span className="text-muted-foreground">{categoryIds.length} selected</span>
+                <Button type="button" variant="ghost" size="sm" onClick={() => setCategoryIds([])} disabled={categoryIds.length === 0}>
+                  Clear all
+                </Button>
+              </div>
             </Command>
           </PopoverContent>
         </Popover>
@@ -188,15 +219,42 @@ function ProductsPage() {
             {PAGE_SIZES.map((n) => <SelectItem key={n} value={String(n)}>{n} / page</SelectItem>)}
           </SelectContent>
         </Select>
-        <Button type="submit" disabled={isFetching}>
+        <Button type="submit" disabled={isFetching || !canSearch}>
           {isFetching ? <Loader2 className="h-4 w-4 animate-spin" /> : "Search"}
         </Button>
-        {(minPrice || maxPrice || categoryId !== "all") && (
-          <Button type="button" variant="ghost" size="sm" onClick={() => { setMinPrice(""); setMaxPrice(""); setCategoryId("all"); }}>
+        {(minPrice || maxPrice || categoryIds.length > 0) && (
+          <Button type="button" variant="ghost" size="sm" onClick={() => { setMinPrice(""); setMaxPrice(""); setCategoryIds([]); }}>
             <X className="h-4 w-4 mr-1" /> Clear filters
           </Button>
         )}
       </form>
+
+      {selectedCategories.length > 0 && (
+        <div className="mb-4 rounded-lg border bg-muted/30 p-2">
+          <div className="mb-1 flex items-center justify-between px-1 text-xs text-muted-foreground">
+            <span>Selected: {selectedCategories.length} categor{selectedCategories.length === 1 ? "y" : "ies"}</span>
+            <button type="button" className="text-primary hover:underline" onClick={() => setCategoryIds([])}>Clear all</button>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {selectedCategories.map((c) => (
+              <span key={c.id} className="inline-flex max-w-full items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-xs text-primary">
+                <span className="max-w-[16rem] truncate" title={c.name}>{c.name}</span>
+                <button
+                  type="button"
+                  aria-label={`Remove ${c.name}`}
+                  onClick={() => setCategoryIds((prev) => prev.filter((x) => x !== c.id))}
+                  className="rounded-full hover:bg-primary/20"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+      {!canSearch && (
+        <p className="mb-3 text-xs text-muted-foreground">Please enter a keyword or select at least one category.</p>
+      )}
 
       {error ? (
         <Card className="p-6 border-destructive/40 bg-destructive/5 text-sm text-destructive">
@@ -250,7 +308,7 @@ function ProductsPage() {
         </div>
       ) : items.length === 0 ? (
         <Card className="p-12 text-center text-sm text-muted-foreground">
-          {query.keyword || query.categoryId ? "No products matched your search." : "Enter a search term or choose a CJ category to browse inventory."}
+          {query.keyword || (query.categoryIds?.length ?? 0) > 0 ? "No products matched your search." : "Enter a search term or choose at least one CJ category to browse inventory."}
         </Card>
       ) : (
         <>
