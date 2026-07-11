@@ -18,6 +18,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { BrandLogo } from "./brand-logo";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { ScrollToggleFab } from "./scroll-toggle-fab";
 
 const NAV = [
   { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -125,6 +126,7 @@ export function AppShell({ children, title, subtitle, actions }: {
           );
         })}
       </nav>
+      <ScrollToggleFab />
     </div>
   );
 }
