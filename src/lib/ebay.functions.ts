@@ -391,47 +391,97 @@ function filterAutomotive(rows: Array<{ categoryId: string; categoryName: string
   return rows.filter((r) => /ebay motors|parts\s*&\s*accessories/i.test(r.path));
 }
 
+// Deterministic "deep scan" for the best eBay leaf category — NO AI.
+// Progressive query fallback + automotive filtering. Shared by the drafts UI
+// and the automatic bulk-send pipeline so both behave identically.
+export async function deepScanEbayCategory(
+  token: string,
+  input: { title?: string | null; cjCategoryName?: string | null; marketplaceId?: string },
+): Promise<Array<{ categoryId: string; categoryName: string; path: string }>> {
+  const marketplaceId = input.marketplaceId ?? "EBAY_US";
+  const rawTitle = String(input.title ?? "").trim();
+  const cleaned = buildCleanCategoryQuery({ title: rawTitle, cjCategoryName: input.cjCategoryName ?? null });
+  const titleOnly = buildCleanCategoryQuery({ title: rawTitle, cjCategoryName: null });
+  const rawFallback = rawTitle.slice(0, 80);
+  const attempts = Array.from(new Set([cleaned, titleOnly, rawFallback].filter(Boolean)));
+  const automotive = isAutomotiveSignal(cleaned, input.cjCategoryName);
+  let rows: Array<{ categoryId: string; categoryName: string; path: string }> = [];
+  let usedQ = "";
+  for (const q of attempts) {
+    try {
+      const r = await getCategorySuggestions(token, q, marketplaceId);
+      const filtered = automotive ? filterAutomotive(r) : r;
+      const chosen = filtered.length ? filtered : r;
+      if (chosen.length > 0) { rows = chosen; usedQ = q; break; }
+    } catch (e) {
+      console.warn("[category-deep-scan] attempt failed q=", q, e instanceof Error ? e.message : e);
+    }
+  }
+  if (rows.length === 0 && automotive) {
+    try {
+      const r = await getCategorySuggestions(token, `${cleaned} car part`, marketplaceId);
+      rows = filterAutomotive(r).length ? filterAutomotive(r) : r;
+      usedQ = `${cleaned} car part`;
+    } catch { /* give up */ }
+  }
+  console.log("[category-deep-scan] raw=", rawTitle, "cjCat=", input.cjCategoryName, "→ usedQ=", usedQ, "rows=", rows.length);
+  return rows;
+}
+
 export const suggestEbayCategories = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((data: { q?: string; title?: string; cjCategoryName?: string | null; marketplaceId?: string }) => data)
   .handler(async ({ data, context }: any) => {
     const token = await getFreshEbayToken(context.supabase, context.userId);
-    const marketplaceId = data.marketplaceId ?? "EBAY_US";
-    const rawTitle = String(data.title ?? data.q ?? "").trim();
-    const cleaned = buildCleanCategoryQuery({ title: rawTitle, cjCategoryName: data.cjCategoryName ?? null });
-
-    // Ordered candidate queries — try each until eBay returns rows.
-    // 1. cleaned (CJ category tail OR scrubbed title) — best signal.
-    // 2. cleaned title only (ignore CJ category which may be too broad).
-    // 3. raw title truncated — last resort so we always return something.
-    const titleOnly = buildCleanCategoryQuery({ title: rawTitle, cjCategoryName: null });
-    const rawFallback = rawTitle.slice(0, 80);
-    const attempts = Array.from(new Set([cleaned, titleOnly, rawFallback].filter(Boolean)));
-
-    const automotive = isAutomotiveSignal(cleaned, data.cjCategoryName);
-    let rows: Array<{ categoryId: string; categoryName: string; path: string }> = [];
-    let usedQ = "";
-    for (const q of attempts) {
-      try {
-        const r = await getCategorySuggestions(token, q, marketplaceId);
-        const filtered = automotive ? filterAutomotive(r) : r;
-        const chosen = filtered.length ? filtered : r; // only fall back to unfiltered when automotive filter blanks the list
-        if (chosen.length > 0) { rows = chosen; usedQ = q; break; }
-      } catch (e) {
-        console.warn("[category-suggest] attempt failed q=", q, e instanceof Error ? e.message : e);
-      }
-    }
-    // Automotive nudge: if we still have nothing, try appending " car part".
-    if (rows.length === 0 && automotive) {
-      try {
-        const r = await getCategorySuggestions(token, `${cleaned} car part`, marketplaceId);
-        rows = filterAutomotive(r).length ? filterAutomotive(r) : r;
-        usedQ = `${cleaned} car part`;
-      } catch { /* give up */ }
-    }
-    console.log("[category-suggest] raw=", rawTitle, "cjCat=", data.cjCategoryName, "→ usedQ=", usedQ, "rows=", rows.length);
-    return rows;
+    return deepScanEbayCategory(token, {
+      title: data.title ?? data.q ?? "",
+      cjCategoryName: data.cjCategoryName ?? null,
+      marketplaceId: data.marketplaceId,
+    });
   });
+
+// Snap a price to the round_to rule (e.g. 0.99 → force cents to .99).
+// roundTo is a fractional value in [0, 1). Values outside that range fall back to 2-decimal rounding.
+export function roundPriceToRule(value: number, roundTo: number): number {
+  const price = Number(value);
+  if (!Number.isFinite(price) || price <= 0) return price;
+  const r = Number(roundTo);
+  if (!Number.isFinite(r) || r < 0 || r >= 1) return Number(price.toFixed(2));
+  const floor = Math.floor(price);
+  const snapped = floor + r;
+  // Never round DOWN below the computed price — always land on the next .r step up.
+  const out = snapped >= price ? snapped : snapped + 1;
+  return Number(out.toFixed(2));
+}
+
+// Apply automation_rules (max_listing_quantity + round_to) to a draft copy,
+// including any nested variant arrays. Pure — returns a new object.
+export function applyRuleToDraft<T extends Record<string, any>>(draft: T, rule: any): T {
+  const maxQty = Math.max(1, Number(rule?.max_listing_quantity ?? 1));
+  const roundTo = Number(rule?.round_to ?? 0.99);
+  const clampedQty = Math.max(1, Math.min(Number(draft.quantity || 1), maxQty));
+  const roundedPrice = roundPriceToRule(Number(draft.price || 0), roundTo);
+  const patched: any = { ...draft, quantity: clampedQty, price: roundedPrice };
+  const patchVariants = (arr: any) => {
+    if (!Array.isArray(arr)) return arr;
+    return arr.map((v: any) => {
+      const p = Number(v?.price ?? v?.variantSellPrice ?? roundedPrice);
+      const q = Number(v?.quantity ?? v?.inventory ?? clampedQty);
+      const newPrice = roundPriceToRule(p, roundTo);
+      const newQty = Math.max(1, Math.min(q, maxQty));
+      return { ...v, price: newPrice, variantSellPrice: newPrice, quantity: newQty, inventory: newQty };
+    });
+  };
+  if (Array.isArray(patched.variants)) patched.variants = patchVariants(patched.variants);
+  if (patched.variant_group?.variants) patched.variant_group = { ...patched.variant_group, variants: patchVariants(patched.variant_group.variants) };
+  if (patched.profit) {
+    const newProfit: any = { ...patched.profit };
+    if (Array.isArray(newProfit.variants)) newProfit.variants = patchVariants(newProfit.variants);
+    if (newProfit.variant_group?.variants) newProfit.variant_group = { ...newProfit.variant_group, variants: patchVariants(newProfit.variant_group.variants) };
+    patched.profit = newProfit;
+  }
+  return patched as T;
+}
 
 export const pushDraftsToEbay = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
@@ -440,6 +490,7 @@ export const pushDraftsToEbay = createServerFn({ method: "POST" })
     const token = await getFreshEbayToken(context.supabase, context.userId);
     const { data: drafts, error } = await context.supabase.from("listing_drafts").select("*").eq("user_id", context.userId).in("id", data.draftIds);
     if (error) throw error;
+    const { data: rule } = await context.supabase.from("automation_rules").select("max_listing_quantity,round_to").eq("user_id", context.userId).maybeSingle();
     const results = [];
     for (const draft of drafts || []) {
       try {
@@ -486,7 +537,11 @@ export const pushDraftsToEbay = createServerFn({ method: "POST" })
         let lastError: unknown = null;
         for (let attempt = 0; attempt < 4; attempt++) {
           try {
-            pushed = await publishInventoryItem(token, workingDraft);
+            // Enforce automation_rules right before publish so any auto-repair,
+            // variant hydration, or draft edits are covered on every retry.
+            const ruleAdjusted = applyRuleToDraft(workingDraft, rule);
+            pushed = await publishInventoryItem(token, ruleAdjusted);
+            workingDraft = ruleAdjusted;
             lastError = null;
             break;
           } catch (err) {
