@@ -333,7 +333,18 @@ function sanitizeDescriptionHtml(value: unknown, fallback = "") {
     })
     .replace(/<(p|div|li|ul|ol|br|strong|b|em|span|table|tbody|thead|tr|td|th|h1|h2|h3|h4|h5|h6)(\s[^>]*)?>/gi, (tag) => tag)
     .trim();
-  return `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.55;color:#111;">${html}</div>`;
+  // eBay caps description at 4000 chars. If the sanitised HTML would blow past
+  // that, fall back to a plain-text summary that always fits inside the wrapper.
+  const wrapperOpen = `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.55;color:#111;">`;
+  const wrapperClose = `</div>`;
+  const maxInner = 4000 - wrapperOpen.length - wrapperClose.length;
+  if (html.length > maxInner) {
+    const plain = html.replace(/<[^>]+>/g, " ").replace(/&nbsp;/gi, " ").replace(/\s+/g, " ").trim();
+    const budget = maxInner - 8; // "<p>" + "</p>" + ellipsis room
+    const clipped = plain.length > budget ? plain.slice(0, budget - 1).trimEnd() + "…" : plain;
+    html = `<p>${escapeHtml(clipped)}</p>`;
+  }
+  return `${wrapperOpen}${html}${wrapperClose}`;
 }
 
 function safeDescription(draft: any) {
