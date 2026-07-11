@@ -71,8 +71,8 @@ function ProductsPage() {
   // Persist search state so navigation back to /products preserves results.
   useEffect(() => {
     if (typeof window === "undefined") return;
-    try { sessionStorage.setItem("cj-products-search", JSON.stringify({ keyword, query, categoryId, countryCode })); } catch { /* ignore */ }
-  }, [keyword, query, categoryId, countryCode]);
+    try { sessionStorage.setItem("cj-products-search", JSON.stringify({ keyword, query, categoryId, countryCode, minPrice, maxPrice })); } catch { /* ignore */ }
+  }, [keyword, query, categoryId, countryCode, minPrice, maxPrice]);
 
   // Which visible products are already listed or in draft?
   const pids = items.map((p) => p.pid);
@@ -93,15 +93,21 @@ function ProductsPage() {
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
+    const min = Number(minPrice);
+    const max = Number(maxPrice);
     setQuery((q) => ({
       ...q,
       keyword,
       categoryId: categoryId === "all" ? undefined : categoryId,
       countryCode: countryCode === "all" ? undefined : countryCode,
+      minPrice: minPrice && !Number.isNaN(min) ? min : undefined,
+      maxPrice: maxPrice && !Number.isNaN(max) ? max : undefined,
       pageNum: 1,
     }));
     setSelected({});
   }
+
+  const activeCat = flatCategories.find((c) => c.id === categoryId);
 
   const bulkDraftFn = useServerFn(bulkSendCjToDrafts);
   const bulkDraft = useMutation({
