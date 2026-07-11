@@ -456,19 +456,32 @@ export function roundPriceToRule(value: number, roundTo: number): number {
 
 // Apply automation_rules (max_listing_quantity + round_to) to a draft copy,
 // including any nested variant arrays. Pure — returns a new object.
+//
+// Quantity rule: `max_listing_quantity` is the *target* stock we publish.
+// If CJ reports real inventory for a variant (inventory / storageNum /
+// availableQuantity fields), we cap the target by that number so we never
+// oversell. When inventory is unknown we simply use the target, so users
+// don't see "1 per variant" published when they asked for e.g. 5.
 export function applyRuleToDraft<T extends Record<string, any>>(draft: T, rule: any): T {
   const maxQty = Math.max(1, Number(rule?.max_listing_quantity ?? 1));
   const roundTo = Number(rule?.round_to ?? 0.99);
-  const clampedQty = Math.max(1, Math.min(Number(draft.quantity || 1), maxQty));
+  const readInv = (v: any): number => {
+    const cand = [v?.inventory, v?.storageNum, v?.availableQuantity, v?.stock, v?.stockNum, v?.cj_stock, v?.quantity]
+      .map((n) => Number(n)).find((n) => Number.isFinite(n) && n > 0);
+    return cand ?? 0;
+  };
+  const targetQty = (inv: number) => inv > 0 ? Math.max(1, Math.min(inv, maxQty)) : maxQty;
+  const rowInv = readInv(draft);
+  const rowQty = targetQty(rowInv);
   const roundedPrice = roundPriceToRule(Number(draft.price || 0), roundTo);
-  const patched: any = { ...draft, quantity: clampedQty, price: roundedPrice };
+  const patched: any = { ...draft, quantity: rowQty, price: roundedPrice };
   const patchVariants = (arr: any) => {
     if (!Array.isArray(arr)) return arr;
     return arr.map((v: any) => {
       const p = Number(v?.price ?? v?.variantSellPrice ?? roundedPrice);
-      const q = Number(v?.quantity ?? v?.inventory ?? clampedQty);
+      const inv = readInv(v);
+      const newQty = targetQty(inv);
       const newPrice = roundPriceToRule(p, roundTo);
-      const newQty = Math.max(1, Math.min(q, maxQty));
       return { ...v, price: newPrice, variantSellPrice: newPrice, quantity: newQty, inventory: newQty };
     });
   };

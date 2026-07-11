@@ -218,17 +218,36 @@ export type CjListResponse = {
 export async function cjSearchProducts(params: {
   keyword?: string;
   categoryId?: string;
+  categoryIds?: string[];
   pageNum?: number;
   pageSize?: number;
   countryCode?: string;
   minPrice?: number;
   maxPrice?: number;
 }, token?: string): Promise<CjListResponse> {
+  const ids = Array.from(new Set((params.categoryIds ?? []).filter(Boolean)));
+  // Multi-category: use CJ Product List V2 POST body with lv3categoryList.
+  if (ids.length > 1) {
+    const body: Record<string, unknown> = {
+      pageNum: params.pageNum ?? 1,
+      pageSize: params.pageSize ?? 20,
+      lv3categoryList: ids,
+    };
+    if (params.keyword) body.productNameEn = params.keyword;
+    if (params.countryCode) body.countryCode = params.countryCode;
+    if (params.minPrice != null) body.minPrice = params.minPrice;
+    if (params.maxPrice != null) body.maxPrice = params.maxPrice;
+    return cjFetch<CjListResponse>(`/product/list`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }, token);
+  }
   const q = new URLSearchParams();
   q.set("pageNum", String(params.pageNum ?? 1));
   q.set("pageSize", String(params.pageSize ?? 20));
   if (params.keyword) q.set("productNameEn", params.keyword);
-  if (params.categoryId) q.set("categoryId", params.categoryId);
+  const singleId = ids[0] || params.categoryId;
+  if (singleId) q.set("categoryId", singleId);
   if (params.countryCode) q.set("countryCode", params.countryCode);
   if (params.minPrice != null) q.set("minPrice", String(params.minPrice));
   if (params.maxPrice != null) q.set("maxPrice", String(params.maxPrice));
