@@ -533,7 +533,6 @@ export const pushDraftsToEbay = createServerFn({ method: "POST" })
             await context.supabase.from("listing_drafts").update({ profit: workingDraft.profit }).eq("id", draft.id);
           }
         }
-    const { data: rule } = await context.supabase.from("automation_rules").select("max_listing_quantity,round_to").eq("user_id", context.userId).maybeSingle();
         let pushed: any;
         let lastError: unknown = null;
         for (let attempt = 0; attempt < 4; attempt++) {
