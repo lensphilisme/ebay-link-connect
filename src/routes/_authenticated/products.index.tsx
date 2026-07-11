@@ -178,10 +178,23 @@ function ProductsPage() {
               <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
             </Button>
           </PopoverTrigger>
-          <PopoverContent className="w-[min(92vw,32rem)] p-0" align="start">
+          <PopoverContent className="w-[min(96vw,32rem)] p-0" align="start">
             <Command>
+              <div className="flex items-center justify-between gap-2 border-b p-2">
+                <span className="text-xs text-muted-foreground">
+                  {categoryIds.length} selected
+                </span>
+                <div className="flex items-center gap-1">
+                  <Button type="button" variant="ghost" size="sm" onClick={() => setCategoryIds([])} disabled={categoryIds.length === 0}>
+                    Clear
+                  </Button>
+                  <Button type="button" size="sm" onClick={() => setCatOpen(false)}>
+                    Done
+                  </Button>
+                </div>
+              </div>
               <CommandInput placeholder="Type to search CJ categories…" />
-              <CommandList className="max-h-80">
+              <CommandList className="max-h-[60vh]">
                 <CommandEmpty>No category matches</CommandEmpty>
                 <CommandGroup>
                   {flatCategories.map((c) => {
@@ -201,11 +214,9 @@ function ProductsPage() {
                   })}
                 </CommandGroup>
               </CommandList>
-              <div className="flex items-center justify-between border-t p-2 text-xs">
+              <div className="sticky bottom-0 flex items-center justify-between gap-2 border-t bg-popover p-2 text-xs">
                 <span className="text-muted-foreground">{categoryIds.length} selected</span>
-                <Button type="button" variant="ghost" size="sm" onClick={() => setCategoryIds([])} disabled={categoryIds.length === 0}>
-                  Clear all
-                </Button>
+                <Button type="button" size="sm" onClick={() => setCatOpen(false)}>Done</Button>
               </div>
             </Command>
           </PopoverContent>
