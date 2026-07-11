@@ -154,11 +154,10 @@ export const bulkSendCjToDrafts = createServerFn({ method: "POST" })
           let categoryPath: string | null = null;
           if (ebayToken) {
             try {
-              const q = buildCleanCategoryQuery({ title, cjCategoryName });
-              const rows = await getCategorySuggestions(ebayToken, q, "EBAY_US");
-              const auto = isAutomotiveSignal(q, cjCategoryName);
-              const filtered = auto ? rows.filter((r: { path: string }) => /ebay motors|parts\s*&\s*accessories/i.test(r.path)) : rows;
-              const pick = (filtered.length ? filtered : rows)[0];
+              // Deterministic deep scan (no AI): tries progressive queries and
+              // applies automotive filtering when applicable.
+              const rows = await deepScanEbayCategory(ebayToken, { title, cjCategoryName });
+              const pick = rows[0];
               if (pick) { categoryId = pick.categoryId; categoryPath = pick.path; }
             } catch { /* leave blank; user can pick manually */ }
           }
