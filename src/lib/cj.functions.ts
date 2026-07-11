@@ -24,7 +24,7 @@ async function tok(ctx: any) {
 
 export const searchCjProducts = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((data: { keyword?: string; categoryId?: string; pageNum?: number; pageSize?: number; countryCode?: string; minPrice?: number; maxPrice?: number; }) => data)
+  .inputValidator((data: { keyword?: string; categoryId?: string; categoryIds?: string[]; pageNum?: number; pageSize?: number; countryCode?: string; minPrice?: number; maxPrice?: number; }) => data)
   .handler(async ({ data, context }: any): Promise<CjListResponse> => cjSearchProducts(data, await tok(context)));
 
 export const getCjProduct = createServerFn({ method: "POST" })
