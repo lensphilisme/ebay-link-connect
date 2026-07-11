@@ -170,17 +170,69 @@ function DraftsPage() {
     if (error) toast.error(error.message); else refetch();
   }
 
+  function toggleAll() {
+    if (allSelected) setSelected({});
+    else setSelected(Object.fromEntries(drafts.map((d: any) => [d.id, true])));
+  }
+
+  // Auto AI-Fill: when the user just bulk-sent products from research, the
+  // products page dropped their new draft IDs in sessionStorage. We fire AI
+  // Fill on them so users can go straight to Push without extra clicks.
+  useEffect(() => {
+    if (typeof window === "undefined" || drafts.length === 0) return;
+    let handle: any = null;
+    try {
+      const raw = sessionStorage.getItem("drafts-auto-fill");
+      if (!raw) return;
+      const { ids, at } = JSON.parse(raw);
+      if (!Array.isArray(ids) || Date.now() - Number(at || 0) > 5 * 60_000) { sessionStorage.removeItem("drafts-auto-fill"); return; }
+      const eligible = drafts.filter((d: any) => ids.includes(d.id) && (!d.item_specifics || Object.keys(d.item_specifics).length <= 2));
+      if (eligible.length === 0) { sessionStorage.removeItem("drafts-auto-fill"); return; }
+      sessionStorage.removeItem("drafts-auto-fill");
+      toast.info(`Auto AI Fill running on ${eligible.length} new draft${eligible.length === 1 ? "" : "s"}…`);
+      handle = setTimeout(() => optimize.mutate(eligible.map((d: any) => d.id)), 400);
+    } catch { /* ignore */ }
+    return () => { if (handle) clearTimeout(handle); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [drafts.length]);
+
+  const dedupKeepCheapest = () => {
+    const toDelete = Array.from(duplicateInfo.flagged);
+    if (toDelete.length === 0) { toast.info("No image duplicates found."); return; }
+    if (!window.confirm(`Delete ${toDelete.length} duplicate draft${toDelete.length === 1 ? "" : "s"} and keep the cheapest supplier for each group?`)) return;
+    bulkDelete.mutate(toDelete);
+  };
+
   return (
     <AppShell title="Drafts" subtitle="Compact queue for fixing, editing and bulk-pushing to eBay">
-      <div className="mb-3 flex flex-wrap gap-2">
-        <Button asChild variant="outline" size="sm"><Link to="/products"><Search className="h-4 w-4 mr-1" />Research</Link></Button>
-        <Button size="sm" disabled={!selectedIds.length || optimize.isPending} onClick={() => optimize.mutate(selectedIds)}><Sparkles className="h-4 w-4 mr-1" />AI Fill</Button>
-        <Button size="sm" disabled={!selectedIds.length || optimizeCopy.isPending} variant="outline" onClick={() => optimizeCopy.mutate(selectedIds)}><Sparkles className="h-4 w-4 mr-1" />AI Optimized</Button>
-        <Button size="sm" disabled={!selectedIds.length || repair.isPending} onClick={() => repair.mutate(selectedIds)}><Wrench className="h-4 w-4 mr-1" />Repair</Button>
-        <Button size="sm" disabled={!failedIds.length || repair.isPending} variant="outline" onClick={() => repair.mutate(failedIds)}><Wrench className="h-4 w-4 mr-1" />Repair failed</Button>
-        <Button size="sm" disabled={!selectedIds.length || push.isPending} onClick={() => push.mutate(selectedIds)}><Rocket className="h-4 w-4 mr-1" />Push</Button>
-        <Button size="sm" disabled={!selectedIds.length || bulkDelete.isPending} variant="destructive" onClick={() => bulkDelete.mutate(selectedIds)}><Trash2 className="h-4 w-4 mr-1" />Delete</Button>
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <button type="button" onClick={toggleAll} aria-label={allSelected ? "Deselect all" : "Select all"}
+          className={`h-8 w-8 shrink-0 rounded-md border flex items-center justify-center text-xs font-bold ${allSelected ? "bg-primary text-primary-foreground" : "bg-background"}`}>
+          {allSelected ? "✓" : ""}
+        </button>
+        <Button asChild variant="outline" size="icon" aria-label="Product research"><Link to="/products"><Search className="h-4 w-4" /></Link></Button>
+        <Button size="icon" disabled={!selectedIds.length || optimize.isPending} onClick={() => optimize.mutate(selectedIds)} aria-label="AI Fill item specifics"><Sparkles className="h-4 w-4" /></Button>
+        <Button size="icon" disabled={!selectedIds.length || optimizeCopy.isPending} variant="outline" onClick={() => optimizeCopy.mutate(selectedIds)} aria-label="AI Optimized copy"><Sparkles className="h-4 w-4" /></Button>
+        <Button size="icon" disabled={!selectedIds.length || repair.isPending} onClick={() => repair.mutate(selectedIds)} aria-label="Repair"><Wrench className="h-4 w-4" /></Button>
+        <Button size="icon" disabled={!failedIds.length || repair.isPending} variant="outline" onClick={() => repair.mutate(failedIds)} aria-label="Repair failed"><Wrench className="h-4 w-4 text-destructive" /></Button>
+        <Button size="icon" disabled={!selectedIds.length || push.isPending} onClick={() => push.mutate(selectedIds)} aria-label="Push to eBay"><Rocket className="h-4 w-4" /></Button>
+        <Button size="icon" variant="outline" onClick={dedupKeepCheapest} aria-label="Deduplicate by image · keep cheapest">
+          <Copy className="h-4 w-4" />
+          {duplicateInfo.groupCount > 0 && <span className="ml-1 text-[10px] font-bold">{duplicateInfo.flagged.size}</span>}
+        </Button>
+        <Button size="icon" disabled={!selectedIds.length || bulkDelete.isPending} variant="destructive" onClick={() => bulkDelete.mutate(selectedIds)} aria-label="Delete"><Trash2 className="h-4 w-4" /></Button>
+        <span className="ml-auto text-xs text-muted-foreground">{selectedIds.length}/{drafts.length} selected</span>
       </div>
+
+      {duplicateInfo.groupCount > 0 && (
+        <Card className="mb-3 p-3 border-amber-500/40 bg-amber-500/5">
+          <div className="flex items-center gap-2 text-xs">
+            <Copy className="h-4 w-4 text-amber-600" />
+            <span className="font-medium">Found {duplicateInfo.groupCount} duplicate group{duplicateInfo.groupCount === 1 ? "" : "s"} by image · {duplicateInfo.flagged.size} extra draft{duplicateInfo.flagged.size === 1 ? "" : "s"}</span>
+            <Button size="sm" variant="outline" className="ml-auto" onClick={dedupKeepCheapest}>Keep cheapest, delete rest</Button>
+          </div>
+        </Card>
+      )}
 
       {pushProgress && (
         <Card className="mb-3 p-3">
