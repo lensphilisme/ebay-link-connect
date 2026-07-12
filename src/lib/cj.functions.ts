@@ -104,11 +104,13 @@ export const bulkSendCjToDrafts = createServerFn({ method: "POST" })
     const token = await tok(context);
     const { data: rule } = await context.supabase
       .from("automation_rules")
-      .select("markup_percent,ebay_fee_buffer_percent")
+      .select("markup_percent,ebay_fee_buffer_percent,max_listing_quantity")
       .eq("user_id", context.userId)
       .maybeSingle();
     const markupPct = Number(rule?.markup_percent ?? 50);
     const feePct = Number(rule?.ebay_fee_buffer_percent ?? 17) / 100;
+    const targetQty = Math.max(1, Number(rule?.max_listing_quantity ?? 1));
+
 
     // Best-effort: fetch an eBay token once so we can auto-suggest a category per draft.
     let ebayToken: string | null = null;
