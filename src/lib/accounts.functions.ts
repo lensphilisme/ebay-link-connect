@@ -103,7 +103,7 @@ export const upsertAccountRule = createServerFn({ method: "POST" })
     z.object({
       id: z.string().uuid().optional(),
       account_id: z.string().uuid(),
-      cj_category: z.string().trim().min(1).max(120),
+      cj_category: z.string().trim().min(1).max(300),
       region: z.string().trim().max(4).optional(),
       is_preferred: z.boolean().optional(),
     }).parse(input),
