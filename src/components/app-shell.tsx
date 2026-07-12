@@ -3,13 +3,11 @@ import {
   LayoutDashboard,
   PackageSearch,
   FileEdit,
-  Tag,
   LineChart,
   Settings2,
   ScrollText,
   LogOut,
   Bell,
-  Rocket,
 } from "lucide-react";
 import { type ReactNode } from "react";
 import { supabase } from "@/integrations/supabase/client";
@@ -23,8 +21,6 @@ const NAV = [
   { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { to: "/products", label: "CJ Products", icon: PackageSearch },
   { to: "/drafts", label: "Drafts", icon: FileEdit },
-  { to: "/listings", label: "Listings", icon: Tag },
-  { to: "/growth", label: "Growth", icon: Rocket },
   { to: "/optimizer", label: "Optimizer", icon: LineChart },
   { to: "/logs", label: "Logs", icon: ScrollText },
   { to: "/settings", label: "Settings", icon: Settings2 },
