@@ -602,10 +602,20 @@ export const pushDraftsToEbay = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((data: { draftIds: string[] }) => data)
   .handler(async ({ data, context }: any) => {
-    const token = await getFreshEbayToken(context.supabase, context.userId);
+    const { getFreshEbayTokenForAccount } = await import("./ebay.server");
     const { data: drafts, error } = await context.supabase.from("listing_drafts").select("*").eq("user_id", context.userId).in("id", data.draftIds);
     if (error) throw error;
     const { data: rule } = await context.supabase.from("automation_rules").select("max_listing_quantity,round_to").eq("user_id", context.userId).maybeSingle();
+    // Cache one token per account so each draft publishes to its assigned seller.
+    const tokenCache = new Map<string | null, string>();
+    const tokenFor = async (accountId: string | null | undefined): Promise<string> => {
+      const key = accountId || null;
+      const cached = tokenCache.get(key);
+      if (cached) return cached;
+      const t = await getFreshEbayTokenForAccount(context.supabase, context.userId, key || undefined);
+      tokenCache.set(key, t);
+      return t;
+    };
     const results = [];
     for (const draft of drafts || []) {
       try {
