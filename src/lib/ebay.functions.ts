@@ -665,6 +665,7 @@ export const pushDraftsToEbay = createServerFn({ method: "POST" })
             // Enforce automation_rules right before publish so any auto-repair,
             // variant hydration, or draft edits are covered on every retry.
             const ruleAdjusted = applyRuleToDraft(workingDraft, rule);
+            const token = await tokenFor(draft.account_id);
             pushed = await publishInventoryItem(token, ruleAdjusted);
             workingDraft = ruleAdjusted;
             lastError = null;
