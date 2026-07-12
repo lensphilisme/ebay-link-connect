@@ -194,8 +194,10 @@ export const bulkSendCjToDrafts = createServerFn({ method: "POST" })
             } catch { /* leave blank; user can pick manually */ }
           }
 
+          const assignedAccountId = routeAccount(cjCategoryName);
           const row = {
             user_id: context.userId,
+            account_id: assignedAccountId,
             cj_product_id: pid,
             cj_variant_id: vid || null,
             sku: first?.variantSku || detail?.productSku || pid,
@@ -231,7 +233,7 @@ export const bulkSendCjToDrafts = createServerFn({ method: "POST" })
             .upsert(row, { onConflict: "user_id,cj_product_id", ignoreDuplicates: false })
             .select("id")
             .maybeSingle();
-          return { pid, ok: true, carrier: carrierName || undefined, shipping: Number(shipping.toFixed(2)), draftId: saved?.id, categoryId };
+          return { pid, ok: true, carrier: carrierName || undefined, shipping: Number(shipping.toFixed(2)), draftId: saved?.id, categoryId, accountId: assignedAccountId };
         } catch (e) {
           return { pid, ok: false, error: e instanceof Error ? e.message : String(e) };
         }
