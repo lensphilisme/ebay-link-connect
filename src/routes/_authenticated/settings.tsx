@@ -5,10 +5,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { connectEbayWithCode, getEbayConnectUrl } from "@/lib/ebay.functions";
 import { saveCjApiKey, getIntegrationStatus } from "@/lib/cj.functions";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
-import { KeyRound, Boxes, Tag, ExternalLink, Type, Globe, Sliders, Sparkles, Users, Route as RouteIcon } from "lucide-react";
+import { KeyRound, Boxes, ExternalLink, Type, Globe, Sliders, Sparkles, Users, Route as RouteIcon } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { TypographySettings } from "@/components/typography-settings";
@@ -20,11 +19,8 @@ import { AccountRulesSettings } from "@/components/account-rules-settings";
 export const Route = createFileRoute("/_authenticated/settings")({ component: SettingsPage });
 
 function SettingsPage() {
-  const [code, setCode] = useState("");
   const [cjEmail, setCjEmail] = useState("");
   const [cjApiKey, setCjApiKey] = useState("");
-  const urlFn = useServerFn(getEbayConnectUrl);
-  const connectFn = useServerFn(connectEbayWithCode);
   const cjSaveFn = useServerFn(saveCjApiKey);
   const statusFn = useServerFn(getIntegrationStatus);
 
@@ -32,24 +28,9 @@ function SettingsPage() {
     queryKey: ["integration-status"],
     queryFn: () => statusFn(),
   });
-  const ebayReady = !!status?.ebay.connected;
   const cjReady = !!status?.cj.connected;
   const cjSource = status?.cj.source;
 
-  const openOAuth = useMutation({
-    mutationFn: () => urlFn(),
-    onSuccess: (url: string) => {
-      // Same-tab navigation so the eBay callback lands back in this session
-      // and can auto-exchange the code — no manual paste required.
-      window.location.assign(url);
-    },
-    onError: (e: Error) => toast.error(e.message),
-  });
-  const connect = useMutation({
-    mutationFn: () => connectFn({ data: { code } }),
-    onSuccess: () => { toast.success("eBay connected"); setCode(""); refetch(); },
-    onError: (e: Error) => toast.error(e.message),
-  });
   const saveCj = useMutation({
     mutationFn: () => cjSaveFn({ data: { email: cjEmail || (status?.cj.email ?? ""), apiKey: cjApiKey } }),
     onSuccess: () => { toast.success("CJ Dropshipping connected — tokens are now managed automatically"); setCjApiKey(""); refetch(); },
@@ -59,13 +40,13 @@ function SettingsPage() {
   return (
     <AppShell title="Settings" subtitle="Integrations, workspace preferences and rules">
       <Card className="shadow-[var(--shadow-card)] p-2 sm:p-4">
-        <Accordion type="multiple" defaultValue={["typography"]} className="w-full">
-          <Section value="typography" icon={Type} title="Typography" status="Site-wide font">
-            <TypographySettings />
+        <Accordion type="multiple" defaultValue={["accounts"]} className="w-full">
+          <Section value="accounts" icon={Users} title="eBay accounts" status="Connect & manage sellers">
+            <AccountsSettings />
           </Section>
 
-          <Section value="app-url" icon={Globe} title="App URL" status="Live domain">
-            <AppUrlSettings />
+          <Section value="account-rules" icon={RouteIcon} title="Account routing rules" status="CJ → eBay">
+            <AccountRulesSettings />
           </Section>
 
           <Section
@@ -97,45 +78,21 @@ function SettingsPage() {
                 Get your API key at{" "}
                 <a className="text-primary underline inline-flex items-center gap-1" href="https://developers.cjdropshipping.com" target="_blank" rel="noreferrer">
                   developers.cjdropshipping.com <ExternalLink className="h-3 w-3" />
-                </a>{" "}— My API → API key. Access &amp; refresh tokens are handled for you.
+                </a>{" "}— My API → API key.
               </p>
             </div>
           </Section>
 
-          <Section
-            value="ebay"
-            icon={Tag}
-            title="eBay"
-            status={ebayReady ? "Connected" : "Needs OAuth"}
-            ready={ebayReady}
-          >
-            <div className="space-y-3">
-              <Button onClick={() => openOAuth.mutate()} disabled={openOAuth.isPending}>
-                {openOAuth.isPending ? "Opening…" : "Connect your eBay account"}
-                <ExternalLink className="h-3 w-3 ml-2" />
-              </Button>
-              <p className="text-xs text-muted-foreground">
-                You'll be redirected to eBay to approve access, then automatically sent
-                back and connected — no code to copy.
-              </p>
-              <details className="text-xs">
-                <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
-                  Having trouble? Paste an authorization code manually
-                </summary>
-                <div className="flex gap-2 mt-2">
-                  <Input value={code} onChange={(e) => setCode(e.target.value)} placeholder="Authorization code" />
-                  <Button variant="outline" onClick={() => connect.mutate()} disabled={!code || connect.isPending}>Save</Button>
-                </div>
-              </details>
-              <div className="mt-2 rounded-md border bg-muted/40 p-3 text-xs space-y-1">
-                <div className="font-medium">Before bulk push you must:</div>
-                <ul className="list-disc ml-4 space-y-0.5">
-                  <li>Opt in to eBay Business Policies → <a className="text-primary underline" target="_blank" rel="noreferrer" href="https://www.bizpolicy.ebay.com/businesspolicy/manage">bizpolicy.ebay.com</a></li>
-                  <li>Create a default payment, shipping and return policy</li>
-                  <li>Enable the Live Push switch in the Rules section below</li>
-                </ul>
-              </div>
-            </div>
+          <Section value="rules" icon={Sliders} title="Pricing & quantity rules" status="Applies to every push">
+            <RulesSettings />
+          </Section>
+
+          <Section value="typography" icon={Type} title="Typography" status="Site-wide font">
+            <TypographySettings />
+          </Section>
+
+          <Section value="app-url" icon={Globe} title="App URL" status="Live domain">
+            <AppUrlSettings />
           </Section>
 
           <Section value="ai" icon={KeyRound} title="Lovable AI (built-in)" status="Ready" ready>
@@ -143,18 +100,6 @@ function SettingsPage() {
               Powers title rewrites, item-specifics guessing and category suggestions.
               No key needed — included with your workspace.
             </p>
-          </Section>
-
-          <Section value="accounts" icon={Users} title="eBay accounts" status="Multi-account">
-            <AccountsSettings />
-          </Section>
-
-          <Section value="account-rules" icon={RouteIcon} title="Account routing rules" status="CJ → eBay">
-            <AccountRulesSettings />
-          </Section>
-
-          <Section value="rules" icon={Sliders} title="Rules" status="Pricing & optimizer">
-            <RulesSettings />
           </Section>
         </Accordion>
       </Card>
