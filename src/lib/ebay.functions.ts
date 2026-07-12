@@ -478,26 +478,34 @@ export function roundPriceToRule(value: number, roundTo: number): number {
 export function applyRuleToDraft<T extends Record<string, any>>(draft: T, rule: any): T {
   const maxQty = Math.max(1, Number(rule?.max_listing_quantity ?? 1));
   const roundTo = Number(rule?.round_to ?? 0.99);
-  const readInv = (v: any): number => {
-    const cand = [v?.inventory, v?.storageNum, v?.availableQuantity, v?.stock, v?.stockNum, v?.cj_stock, v?.quantity]
-      .map((n) => Number(n)).find((n) => Number.isFinite(n) && n > 0);
-    return cand ?? 0;
+  // readInv returns `null` when we truly don't know the stock, so targetQty
+  // can fall back to the rule's target instead of publishing quantity 1.
+  const readInv = (v: any): number | null => {
+    for (const field of [v?.inventory, v?.storageNum, v?.availableQuantity, v?.stock, v?.stockNum, v?.cj_stock]) {
+      const n = Number(field);
+      if (Number.isFinite(n) && n >= 0) return n;
+    }
+    // `quantity` is a last resort — it's often the previously-published qty (e.g. 1),
+    // not real stock. Ignore it so we don't get stuck republishing at 1.
+    return null;
   };
-  const targetQty = (inv: number) => inv > 0 ? Math.max(1, Math.min(inv, maxQty)) : maxQty;
+  const targetQty = (inv: number | null) =>
+    inv == null ? maxQty : (inv <= 0 ? 0 : Math.max(1, Math.min(inv, maxQty)));
   const rowInv = readInv(draft);
   const rowQty = targetQty(rowInv);
   const roundedPrice = roundPriceToRule(Number(draft.price || 0), roundTo);
-  const patched: any = { ...draft, quantity: rowQty, price: roundedPrice };
+  const patched: any = { ...draft, quantity: Math.max(1, rowQty || maxQty), price: roundedPrice };
   const patchVariants = (arr: any) => {
     if (!Array.isArray(arr)) return arr;
     return arr.map((v: any) => {
       const p = Number(v?.price ?? v?.variantSellPrice ?? roundedPrice);
       const inv = readInv(v);
-      const newQty = targetQty(inv);
+      const newQty = Math.max(1, targetQty(inv) || maxQty);
       const newPrice = roundPriceToRule(p, roundTo);
       return { ...v, price: newPrice, variantSellPrice: newPrice, quantity: newQty, inventory: newQty };
     });
   };
+
   if (Array.isArray(patched.variants)) patched.variants = patchVariants(patched.variants);
   if (patched.variant_group?.variants) patched.variant_group = { ...patched.variant_group, variants: patchVariants(patched.variant_group.variants) };
   if (patched.profit) {
