@@ -88,10 +88,22 @@ function DraftsPage() {
   }, [drafts]);
 
   const optimize = useMutation({
-    mutationFn: async (ids: string[]) => { for (const id of ids) await optimizeFn({ data: { draftId: id } }); },
-    onSuccess: () => { toast.success("AI Fill completed item specifics"); refetch(); },
+    mutationFn: async (ids: string[]) => {
+      const results = { ok: 0, failed: [] as { id: string; error: string }[] };
+      for (const id of ids) {
+        try { await optimizeFn({ data: { draftId: id } }); results.ok++; }
+        catch (e) { results.failed.push({ id, error: e instanceof Error ? e.message : String(e) }); }
+      }
+      return results;
+    },
+    onSuccess: (r) => {
+      if (r.ok) toast.success(`AI Fill completed on ${r.ok} draft${r.ok === 1 ? "" : "s"}`);
+      if (r.failed.length) toast.error(`AI Fill skipped ${r.failed.length}: ${r.failed[0].error}`);
+      refetch();
+    },
     onError: (e: Error) => toast.error(e.message),
   });
+
 
   const optimizeCopy = useMutation({
     mutationFn: async (ids: string[]) => { for (const id of ids) await optimizeCopyFn({ data: { draftId: id } }); },
