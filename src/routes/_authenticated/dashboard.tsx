@@ -60,8 +60,10 @@ function DashboardPage() {
     { Icon: KeyRound, label: "Integrations", v: `${integrations}/3`, hint: status?.ebay.connected ? "eBay OK" : "connect eBay" },
   ];
 
+  const accountsList = overview?.accounts ?? [];
+
   return (
-    <AppShell title="Dashboard" subtitle="Overview of your CJ → eBay pipeline">
+    <AppShell title="Dashboard" subtitle="Overview of your CJ → eBay pipeline" actions={<AccountSwitcher />}>
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         {stats.map((s) => (
           <Card key={s.label} className="shadow-[var(--shadow-card)]">
@@ -76,6 +78,35 @@ function DashboardPage() {
           </Card>
         ))}
       </div>
+
+      {accountsList.length > 0 && (
+        <div className="mt-8">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-sm font-semibold">All accounts</h2>
+            <span className="text-xs text-muted-foreground">
+              {activeAccountId ? "Filter active — clear switcher to see all" : "Showing every connected account"}
+            </span>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {accountsList.map((a: any) => (
+              <Card key={a.id} className={activeAccountId === a.id ? "border-primary shadow-[var(--shadow-card)]" : "shadow-[var(--shadow-card)]"}>
+                <CardHeader className="pb-2 p-3 sm:p-4">
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="text-sm font-semibold truncate">{a.account_name}</CardTitle>
+                    {!a.is_active && <span className="text-[10px] rounded-full bg-muted text-muted-foreground px-2 py-0.5">paused</span>}
+                  </div>
+                </CardHeader>
+                <CardContent className="p-3 pt-0 sm:p-4 sm:pt-0 space-y-1 text-xs text-muted-foreground">
+                  <div className="flex justify-between"><span>Active listings</span><span className="font-medium text-foreground">{a.listings_active}</span></div>
+                  <div className="flex justify-between"><span>Units sold</span><span className="font-medium text-foreground">{a.units_sold}</span></div>
+                  <div className="flex justify-between"><span>Drafts pending</span><span className="font-medium text-foreground">{a.drafts_pending}</span></div>
+                  <div className="flex justify-between"><span>GMV</span><span className="font-medium text-foreground">${Number(a.gmv || 0).toFixed(2)}</span></div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="mt-8 grid gap-4 lg:grid-cols-3">
         <Card className="lg:col-span-2 shadow-[var(--shadow-card)]">
