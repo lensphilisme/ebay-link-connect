@@ -44,6 +44,27 @@ export type Database = {
         }
         Relationships: []
       }
+      app_settings: {
+        Row: {
+          created_at: string
+          typography_font: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          typography_font?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          typography_font?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       automation_rules: {
         Row: {
           allow_bold_title: boolean
