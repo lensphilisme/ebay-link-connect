@@ -5,8 +5,11 @@ import { Button } from "@/components/ui/button";
 import { useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { getIntegrationStatus } from "@/lib/cj.functions";
+import { getAccountsOverview } from "@/lib/accounts.functions";
 import { supabase } from "@/integrations/supabase/client";
 import { ArrowRight, Boxes, FileEdit, Tag, KeyRound, PackageSearch, TrendingUp } from "lucide-react";
+import { AccountSwitcher } from "@/components/account-switcher";
+import { useActiveAccountId } from "@/lib/active-account";
 
 export const Route = createFileRoute("/_authenticated/dashboard")({
   component: DashboardPage,
@@ -14,16 +17,23 @@ export const Route = createFileRoute("/_authenticated/dashboard")({
 
 function DashboardPage() {
   const statusFn = useServerFn(getIntegrationStatus);
+  const overviewFn = useServerFn(getAccountsOverview);
+  const [activeAccountId] = useActiveAccountId();
   const { data: status } = useQuery({ queryKey: ["integration-status"], queryFn: () => statusFn() });
+  const { data: overview } = useQuery({ queryKey: ["accounts-overview"], queryFn: () => overviewFn(), refetchInterval: 60_000 });
 
   const { data: counts } = useQuery({
-    queryKey: ["dashboard-counts"],
+    queryKey: ["dashboard-counts", activeAccountId],
     queryFn: async () => {
-      const [drafts, listings, logs] = await Promise.all([
-        supabase.from("listing_drafts").select("id,status,price", { count: "exact" }),
-        supabase.from("ebay_listings").select("id,status,sales,views,price", { count: "exact" }),
-        supabase.from("activity_logs").select("id,message,level,created_at").order("created_at", { ascending: false }).limit(6),
-      ]);
+      const draftsQ = supabase.from("listing_drafts").select("id,status,price,account_id", { count: "exact" });
+      const listingsQ = supabase.from("ebay_listings").select("id,status,sales,views,price,account_id", { count: "exact" });
+      const logsQ = supabase.from("activity_logs").select("id,message,level,created_at,account_id").order("created_at", { ascending: false }).limit(6);
+      if (activeAccountId) {
+        draftsQ.eq("account_id", activeAccountId);
+        listingsQ.eq("account_id", activeAccountId);
+        logsQ.eq("account_id", activeAccountId);
+      }
+      const [drafts, listings, logs] = await Promise.all([draftsQ, listingsQ, logsQ]);
       const draftRows = drafts.data || [];
       const listingRows = listings.data || [];
       return {
