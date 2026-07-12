@@ -684,7 +684,7 @@ export const pushDraftsToEbay = createServerFn({ method: "POST" })
           throw new Error(`eBay did not confirm all ${expectedVariants} variants were published. Nothing was marked pushed.`);
         }
 
-        await context.supabase.from("ebay_listings").insert({ user_id: context.userId, draft_id: draft.id, ebay_item_id: pushed.listingId, ebay_offer_id: pushed.offerId, sku: workingDraft.sku, title: workingDraft.title, price: workingDraft.price, cj_product_id: workingDraft.cj_product_id, status: "active", cj_landed_cost: Number((workingDraft.profit || {}).item_cost || 0) + Number((workingDraft.profit || {}).shipping || 0) });
+        await context.supabase.from("ebay_listings").insert({ user_id: context.userId, account_id: draft.account_id || null, draft_id: draft.id, ebay_item_id: pushed.listingId, ebay_offer_id: pushed.offerId, sku: workingDraft.sku, title: workingDraft.title, price: workingDraft.price, cj_product_id: workingDraft.cj_product_id, status: "active", cj_landed_cost: Number((workingDraft.profit || {}).item_cost || 0) + Number((workingDraft.profit || {}).shipping || 0) });
         // Auto-remove pushed draft from queue.
         await context.supabase.from("listing_drafts").delete().eq("id", draft.id);
         await context.supabase.from("activity_logs").insert({ user_id: context.userId, level: "success", category: "ebay", message: `Pushed to eBay: ${workingDraft.title}`, metadata: { draftId: draft.id, listingId: pushed.listingId, offerId: pushed.offerId, variants: expectedVariants || 1 } });
