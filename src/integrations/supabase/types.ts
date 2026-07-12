@@ -46,18 +46,21 @@ export type Database = {
       }
       app_settings: {
         Row: {
+          app_url: string | null
           created_at: string
           typography_font: string
           updated_at: string
           user_id: string
         }
         Insert: {
+          app_url?: string | null
           created_at?: string
           typography_font?: string
           updated_at?: string
           user_id: string
         }
         Update: {
+          app_url?: string | null
           created_at?: string
           typography_font?: string
           updated_at?: string
