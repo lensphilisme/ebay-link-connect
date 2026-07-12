@@ -225,15 +225,60 @@ function draftVariantCount(draft: any) {
 
 
 
+function encodeOAuthState(payload: { u: string; a?: string | null }) {
+  return Buffer.from(JSON.stringify(payload)).toString("base64");
+}
+
 export const getEbayConnectUrl = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .handler(async ({ context }: any) => ebayConsentUrl(context.userId));
+  .inputValidator((input: { accountId?: string } | undefined) => input ?? {})
+  .handler(async ({ data, context }: any) => {
+    const state = encodeOAuthState({ u: context.userId, a: data?.accountId || null });
+    return ebayConsentUrl(state);
+  });
 
 export const connectEbayWithCode = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((data: { code: string }) => data)
+  .inputValidator((data: { code: string; accountId?: string | null; accountName?: string }) => data)
   .handler(async ({ data, context }: any) => {
     const creds = await exchangeEbayCode(decodeURIComponent(data.code.trim()));
+
+    // Multi-account write path — always land tokens on ebay_accounts.
+    let accountId = data.accountId || null;
+    if (!accountId) {
+      // Prefer the existing default account, else create one.
+      const { data: existing } = await context.supabase
+        .from("ebay_accounts")
+        .select("id")
+        .eq("user_id", context.userId)
+        .order("created_at", { ascending: true })
+        .limit(1)
+        .maybeSingle();
+      if (existing?.id) accountId = existing.id;
+      else {
+        const { data: created, error: cErr } = await context.supabase
+          .from("ebay_accounts")
+          .insert({ user_id: context.userId, account_name: data.accountName || "Default", is_active: true })
+          .select("id")
+          .single();
+        if (cErr) throw cErr;
+        accountId = created.id;
+      }
+    }
+
+    const { error: uErr } = await context.supabase
+      .from("ebay_accounts")
+      .update({
+        access_token: creds.access_token,
+        refresh_token: creds.refresh_token,
+        token_expires_at: creds.expires_at ? new Date(creds.expires_at).toISOString() : null,
+        is_active: true,
+      })
+      .eq("id", accountId)
+      .eq("user_id", context.userId);
+    if (uErr) throw uErr;
+
+    // Mirror to legacy integration_credentials so existing code paths keep working.
     const row = {
       user_id: context.userId,
       provider: "ebay",
@@ -243,10 +288,11 @@ export const connectEbayWithCode = createServerFn({ method: "POST" })
       last_validated_at: new Date().toISOString(),
       credentials: creds,
     };
-    const { data: existing } = await context.supabase.from("integration_credentials").select("id").eq("user_id", context.userId).eq("provider", "ebay").eq("label", "default").maybeSingle();
-    if (existing?.id) await context.supabase.from("integration_credentials").update(row).eq("id", existing.id);
+    const { data: existingCred } = await context.supabase.from("integration_credentials").select("id").eq("user_id", context.userId).eq("provider", "ebay").eq("label", "default").maybeSingle();
+    if (existingCred?.id) await context.supabase.from("integration_credentials").update(row).eq("id", existingCred.id);
     else await context.supabase.from("integration_credentials").insert(row);
-    return { ok: true };
+
+    return { ok: true, account_id: accountId };
   });
 
 export const syncEbayListings = createServerFn({ method: "POST" })
