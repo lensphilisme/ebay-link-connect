@@ -7,7 +7,6 @@ import {
   LineChart,
   Settings2,
   ScrollText,
-  Sliders,
   LogOut,
   Bell,
   Rocket,
