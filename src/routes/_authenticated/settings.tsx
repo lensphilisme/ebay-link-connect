@@ -11,6 +11,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { KeyRound, Boxes, Tag, ExternalLink } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { toast } from "sonner";
+import { TypographySettings } from "@/components/typography-settings";
 
 export const Route = createFileRoute("/_authenticated/settings")({ component: SettingsPage });
 
@@ -49,6 +50,7 @@ function SettingsPage() {
   return (
     <AppShell title="Settings" subtitle="Integrations, profile and workspace preferences">
       <div className="grid gap-4 lg:grid-cols-2">
+        <TypographySettings />
         <IntegrationCard
           icon={Boxes}
           title="CJ Dropshipping"
