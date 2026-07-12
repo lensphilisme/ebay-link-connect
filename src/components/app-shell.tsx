@@ -7,7 +7,6 @@ import {
   LineChart,
   Settings2,
   ScrollText,
-  Sliders,
   LogOut,
   Bell,
   Rocket,
@@ -27,7 +26,6 @@ const NAV = [
   { to: "/listings", label: "Listings", icon: Tag },
   { to: "/growth", label: "Growth", icon: Rocket },
   { to: "/optimizer", label: "Optimizer", icon: LineChart },
-  { to: "/rules", label: "Rules", icon: Sliders },
   { to: "/logs", label: "Logs", icon: ScrollText },
   { to: "/settings", label: "Settings", icon: Settings2 },
 ] as const;
