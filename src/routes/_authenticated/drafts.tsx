@@ -198,7 +198,7 @@ function DraftsPage() {
       if (!raw) return;
       const { ids, at } = JSON.parse(raw);
       if (!Array.isArray(ids) || Date.now() - Number(at || 0) > 5 * 60_000) { sessionStorage.removeItem("drafts-auto-fill"); return; }
-      const eligible = drafts.filter((d: any) => ids.includes(d.id) && (!d.item_specifics || Object.keys(d.item_specifics).length <= 2));
+      const eligible = drafts.filter((d: any) => ids.includes(d.id) && d.category_id && (!d.item_specifics || Object.keys(d.item_specifics).length <= 2));
       if (eligible.length === 0) { sessionStorage.removeItem("drafts-auto-fill"); return; }
       sessionStorage.removeItem("drafts-auto-fill");
       toast.info(`Auto AI Fill running on ${eligible.length} new draft${eligible.length === 1 ? "" : "s"}…`);
