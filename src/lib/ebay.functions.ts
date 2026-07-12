@@ -155,15 +155,17 @@ function pickAspectFromCj(name: string, detail: any) {
 }
 
 async function autoRepairDraftFromCj(context: any, draft: any, reason: string) {
-  const { cjProductDetail, getUserCjToken } = await import("./cj.server");
+  const { cjProductDetail, getUserCjToken, cjGetProductStock } = await import("./cj.server");
   const token = await getUserCjToken(context.supabase, context.userId);
   const detail: any = await cjProductDetail(draft.cj_product_id, draft.profit?.end_country || "US", token);
+  const stockByVid = await cjGetProductStock(draft.cj_product_id, token).catch(() => ({} as Record<string, number>));
   const startCountry = compactCountry(draft.profit?.start_country || detail?.countryCode || detail?.countryFrom || detail?.sourceFrom, "CN");
   const warehouse = await resolveCjWarehouse(context, startCountry);
   const title = compactText(detail?.productNameEn, draft.title).slice(0, 80) || draft.title;
   const description = String(detail?.description || draft.description || `${title}. New item. Review photos and selected option before checkout.`).trim();
   const images = cleanImages(draft.images, detail?.productImageSet, detail?.productImages, detail?.bigImage, detail?.productImage);
-  const variants = repairVariants(detail, draft, images);
+  const variants = repairVariants(detail, draft, images, stockByVid);
+
   const itemSpecifics: Record<string, string> = {
     ...(draft.item_specifics || {}),
     Brand: compactText(draft.brand || draft.item_specifics?.Brand || detail?.brand, "Unbranded"),
