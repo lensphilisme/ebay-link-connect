@@ -174,12 +174,22 @@ export const optimizeDraftWithAi = createServerFn({ method: "POST" })
   .handler(async ({ data, context }: any) => {
     const { data: draft, error } = await context.supabase.from("listing_drafts").select("*").eq("user_id", context.userId).eq("id", data.draftId).single();
     if (error) throw error;
+    // Guardrail: eBay Item Specifics must be generated against the exact
+    // category's aspect catalog. Without a category the AI would hallucinate
+    // field names that don't map to eBay. Refuse instead.
+    if (!draft.category_id) {
+      throw new Error("AI Fill needs an eBay category first. Pick a category (or run Auto category) before AI Fill.");
+    }
     const aspectCatalog = await getAspectCatalog(context, draft);
+    if (!Object.keys(aspectCatalog).length) {
+      throw new Error(`eBay returned no Item Specifics for category ${draft.category_id}. Verify the category ID is a valid leaf, then retry.`);
+    }
+    const allowedNames = Object.keys(aspectCatalog);
     let cjDetail: any = null;
     try {
       if (draft.cj_product_id) cjDetail = await cjProductDetail(draft.cj_product_id, draft.profit?.end_country || "US", await getUserCjToken(context.supabase, context.userId));
     } catch { cjDetail = null; }
-    let out: any = { item_specifics: fallback(draft.title, draft.description).item_specifics, brand: draft.brand || "Unbranded", model: draft.model || "Does Not Apply" };
+    let out: any = { item_specifics: {}, brand: draft.brand || "Unbranded", model: draft.model || "Does Not Apply" };
     if (process.env.LOVABLE_API_KEY) {
       try {
         const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
@@ -189,7 +199,7 @@ export const optimizeDraftWithAi = createServerFn({ method: "POST" })
             model: "openai/gpt-5.5",
             response_format: { type: "json_object" },
             messages: [
-              { role: "system", content: "You are eBay AI Fill. Return strict JSON with item_specifics, brand, and model only. Fill every applicable eBay item specific supported by the category to maximize search/filter visibility. Use category aspect names exactly when provided. Include required aspects and useful recommended aspects. Use arrays for multi-value fields like Features. Never include Item Location, Location, warehouse, ship-from, postal code, city, state, merchantLocationKey, or any listing/inventory location field in item_specifics. Do not write title or description." },
+              { role: "system", content: `You are eBay AI Fill. Return strict JSON with item_specifics, brand, and model only. You MUST use ONLY these exact eBay aspect names as keys in item_specifics (case-sensitive): ${allowedNames.join(", ")}. Do NOT invent new aspect names. Prefer values from each aspect's allowed list when provided. Fill every REQUIRED aspect, then as many recommended aspects as the source data supports. Leave an aspect out (do not fabricate) when the source data has no evidence. Use arrays only for aspects whose cardinality is MULTI. Never include Item Location, Location, warehouse, ship-from, postal code, city, state, merchantLocationKey, or any listing/inventory location field. Do not write title or description.` },
               { role: "user", content: JSON.stringify({ title: draft.title, description: draft.description, category_id: draft.category_id, category_aspects: catalogForPrompt(aspectCatalog), existing_specifics: draft.item_specifics, brand: draft.brand, model: draft.model, sku: draft.sku, cj_product: cjDetail ? { name: cjDetail.productNameEn, categoryName: cjDetail.categoryName, productType: cjDetail.productType, productKeyEn: cjDetail.productKeyEn, productProEnSet: cjDetail.productProEnSet } : null }) },
             ],
           }),
@@ -197,19 +207,27 @@ export const optimizeDraftWithAi = createServerFn({ method: "POST" })
         const json = await res.json();
         out = normalizeAiJson(json, out);
       } catch {
-        out = { item_specifics: fallback(draft.title, draft.description).item_specifics, brand: draft.brand || "Unbranded", model: draft.model || "Does Not Apply" };
+        out = { item_specifics: {}, brand: draft.brand || "Unbranded", model: draft.model || "Does Not Apply" };
       }
     }
-    const specifics = sanitizeSpecifics({ Brand: out.brand || draft.brand || "Unbranded", ...(out.item_specifics || {}), Model: out.model || draft.model || "Does Not Apply" });
+    // Restrict to catalog names only — drop hallucinated keys.
+    const allowedLower = new Map(allowedNames.map((n) => [n.toLowerCase(), n]));
+    const filteredAi: Record<string, string | string[]> = {};
+    for (const [k, v] of Object.entries(out.item_specifics || {})) {
+      const canonical = allowedLower.get(String(k).toLowerCase());
+      if (canonical) filteredAi[canonical] = v as any;
+    }
+    const specifics = sanitizeSpecifics({ Brand: out.brand || draft.brand || "Unbranded", ...filteredAi, Model: out.model || draft.model || "Does Not Apply" });
     const update = {
       item_specifics: specifics,
       brand: Array.isArray(specifics.Brand) ? specifics.Brand[0] : specifics.Brand,
       model: Array.isArray(specifics.Model) ? specifics.Model[0] : specifics.Model,
     };
     await context.supabase.from("listing_drafts").update(update).eq("id", draft.id);
-    await context.supabase.from("activity_logs").insert({ user_id: context.userId, level: "success", category: "ai", message: `AI filled item specifics: ${draft.title}`, metadata: { draftId: draft.id, aspectCount: Object.keys(specifics).length } });
+    await context.supabase.from("activity_logs").insert({ user_id: context.userId, level: "success", category: "ai", message: `AI filled item specifics: ${draft.title}`, metadata: { draftId: draft.id, aspectCount: Object.keys(specifics).length, categoryId: draft.category_id } });
     return update;
   });
+
 
 export const optimizeDraftCopyWithAi = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])

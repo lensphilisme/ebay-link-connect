@@ -342,3 +342,24 @@ export async function cjFreightCalculate(params: {
     body: JSON.stringify(body),
   }, token);
 }
+
+// Real per-variant stock lookup. CJ's /product/query endpoint does not return
+// inventory reliably; the dedicated stock endpoint does. Returns a map of
+// vid → available units. Never throws — a missing endpoint just yields {}.
+export async function cjGetProductStock(pid: string, token?: string): Promise<Record<string, number>> {
+  try {
+    const q = new URLSearchParams({ pid });
+    const res: any = await cjFetch<any>(`/product/stock/queryByPid?${q}`, {}, token);
+    const list: any[] = Array.isArray(res)
+      ? res
+      : res?.variantList || res?.list || res?.variants || res?.data || [];
+    const out: Record<string, number> = {};
+    for (const v of list) {
+      const vid = String(v?.vid || v?.variantVid || v?.variantId || "");
+      const num = Number(v?.storageNum ?? v?.stockNum ?? v?.inventory ?? v?.availableQuantity ?? v?.availableNum ?? v?.available ?? 0);
+      if (vid && Number.isFinite(num) && num >= 0) out[vid] = num;
+    }
+    return out;
+  } catch { return {}; }
+}
+

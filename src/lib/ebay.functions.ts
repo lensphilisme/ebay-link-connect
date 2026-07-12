@@ -74,27 +74,38 @@ function inferType(title: string, detail: any, draft: any) {
   return compactText(title).split(/\s+/).filter((w) => w.length > 2).slice(0, 4).join(" ").slice(0, 65) || "General Product";
 }
 
-function repairVariants(detail: any, draft: any, images: string[]) {
+function repairVariants(detail: any, draft: any, images: string[], stockByVid: Record<string, number> = {}) {
   const variants = detail?.variants || detail?.variantList || detail?.productVariants || draft?.profit?.variant_group?.variants || [];
   if (!Array.isArray(variants) || variants.length <= 1) return null;
   const productKey = compactText(detail?.productKeyEn || draft?.profit?.product_key);
   const axes = productKey ? productKey.split(/[-,/|>]+/).map((v) => compactText(v)).filter(Boolean) : [];
   const safeAxes = axes.length ? axes.map((a, i) => (/^type$/i.test(a) ? (i === 0 ? "Style" : `Option ${i + 1}`) : a)) : undefined;
   return {
-    variants: variants.map((v: any, i: number) => ({
-      vid: v.vid,
-      variantSku: v.variantSku || v.sku || v.vid || `${draft.sku}-${i + 1}`,
-      variantKey: compactText(v.variantKey || v.variantNameEn || v.variantSku || v.vid || `Option ${i + 1}`),
-      variantNameEn: v.variantNameEn,
-      variantImage: cleanImages(v.variantImage, v.image, images)[0] || images[0] || null,
-      variantSellPrice: Number(v.variantSellPrice ?? v.price ?? draft.price ?? 0),
-      price: Number(v.price ?? v.variantSellPrice ?? draft.price ?? 0),
-      inventory: Number(v.inventory || v.quantity || draft.quantity || 1),
-    })),
+    variants: variants.map((v: any, i: number) => {
+      // Prefer live stock from CJ stock endpoint (keyed by vid), then any inline
+      // inventory field on the variant. `null` means "unknown" — applyRuleToDraft
+      // then falls back to the user's rule default instead of publishing qty=1.
+      const vid = String(v?.vid || "");
+      const liveStock = vid && Object.prototype.hasOwnProperty.call(stockByVid, vid) ? Number(stockByVid[vid]) : undefined;
+      const inlineStock = [v?.inventory, v?.storageNum, v?.stockNum, v?.availableQuantity]
+        .map((n) => Number(n)).find((n) => Number.isFinite(n) && n >= 0);
+      const inv = Number.isFinite(liveStock as number) ? (liveStock as number) : (inlineStock ?? null);
+      return {
+        vid: v.vid,
+        variantSku: v.variantSku || v.sku || v.vid || `${draft.sku}-${i + 1}`,
+        variantKey: compactText(v.variantKey || v.variantNameEn || v.variantSku || v.vid || `Option ${i + 1}`),
+        variantNameEn: v.variantNameEn,
+        variantImage: cleanImages(v.variantImage, v.image, images)[0] || images[0] || null,
+        variantSellPrice: Number(v.variantSellPrice ?? v.price ?? draft.price ?? 0),
+        price: Number(v.price ?? v.variantSellPrice ?? draft.price ?? 0),
+        inventory: inv,
+      };
+    }),
     axes: safeAxes,
     productKey,
   };
 }
+
 
 // Reasonable defaults for aspects eBay commonly requires but CJ doesn't supply cleanly.
 const ASPECT_DEFAULTS: Record<string, string> = {
@@ -144,15 +155,17 @@ function pickAspectFromCj(name: string, detail: any) {
 }
 
 async function autoRepairDraftFromCj(context: any, draft: any, reason: string) {
-  const { cjProductDetail, getUserCjToken } = await import("./cj.server");
+  const { cjProductDetail, getUserCjToken, cjGetProductStock } = await import("./cj.server");
   const token = await getUserCjToken(context.supabase, context.userId);
   const detail: any = await cjProductDetail(draft.cj_product_id, draft.profit?.end_country || "US", token);
+  const stockByVid = await cjGetProductStock(draft.cj_product_id, token).catch(() => ({} as Record<string, number>));
   const startCountry = compactCountry(draft.profit?.start_country || detail?.countryCode || detail?.countryFrom || detail?.sourceFrom, "CN");
   const warehouse = await resolveCjWarehouse(context, startCountry);
   const title = compactText(detail?.productNameEn, draft.title).slice(0, 80) || draft.title;
   const description = String(detail?.description || draft.description || `${title}. New item. Review photos and selected option before checkout.`).trim();
   const images = cleanImages(draft.images, detail?.productImageSet, detail?.productImages, detail?.bigImage, detail?.productImage);
-  const variants = repairVariants(detail, draft, images);
+  const variants = repairVariants(detail, draft, images, stockByVid);
+
   const itemSpecifics: Record<string, string> = {
     ...(draft.item_specifics || {}),
     Brand: compactText(draft.brand || draft.item_specifics?.Brand || detail?.brand, "Unbranded"),
@@ -465,26 +478,34 @@ export function roundPriceToRule(value: number, roundTo: number): number {
 export function applyRuleToDraft<T extends Record<string, any>>(draft: T, rule: any): T {
   const maxQty = Math.max(1, Number(rule?.max_listing_quantity ?? 1));
   const roundTo = Number(rule?.round_to ?? 0.99);
-  const readInv = (v: any): number => {
-    const cand = [v?.inventory, v?.storageNum, v?.availableQuantity, v?.stock, v?.stockNum, v?.cj_stock, v?.quantity]
-      .map((n) => Number(n)).find((n) => Number.isFinite(n) && n > 0);
-    return cand ?? 0;
+  // readInv returns `null` when we truly don't know the stock, so targetQty
+  // can fall back to the rule's target instead of publishing quantity 1.
+  const readInv = (v: any): number | null => {
+    for (const field of [v?.inventory, v?.storageNum, v?.availableQuantity, v?.stock, v?.stockNum, v?.cj_stock]) {
+      const n = Number(field);
+      if (Number.isFinite(n) && n >= 0) return n;
+    }
+    // `quantity` is a last resort — it's often the previously-published qty (e.g. 1),
+    // not real stock. Ignore it so we don't get stuck republishing at 1.
+    return null;
   };
-  const targetQty = (inv: number) => inv > 0 ? Math.max(1, Math.min(inv, maxQty)) : maxQty;
+  const targetQty = (inv: number | null) =>
+    inv == null ? maxQty : (inv <= 0 ? 0 : Math.max(1, Math.min(inv, maxQty)));
   const rowInv = readInv(draft);
   const rowQty = targetQty(rowInv);
   const roundedPrice = roundPriceToRule(Number(draft.price || 0), roundTo);
-  const patched: any = { ...draft, quantity: rowQty, price: roundedPrice };
+  const patched: any = { ...draft, quantity: Math.max(1, rowQty || maxQty), price: roundedPrice };
   const patchVariants = (arr: any) => {
     if (!Array.isArray(arr)) return arr;
     return arr.map((v: any) => {
       const p = Number(v?.price ?? v?.variantSellPrice ?? roundedPrice);
       const inv = readInv(v);
-      const newQty = targetQty(inv);
+      const newQty = Math.max(1, targetQty(inv) || maxQty);
       const newPrice = roundPriceToRule(p, roundTo);
       return { ...v, price: newPrice, variantSellPrice: newPrice, quantity: newQty, inventory: newQty };
     });
   };
+
   if (Array.isArray(patched.variants)) patched.variants = patchVariants(patched.variants);
   if (patched.variant_group?.variants) patched.variant_group = { ...patched.variant_group, variants: patchVariants(patched.variant_group.variants) };
   if (patched.profit) {
