@@ -28,7 +28,7 @@ function basicAuth() {
   return Buffer.from(`${required("EBAY_CLIENT_ID")}:${required("EBAY_CLIENT_SECRET")}`).toString("base64");
 }
 
-export function ebayConsentUrl(state: string) {
+export function ebayConsentUrl(state: string, opts: { forceLogin?: boolean } = {}) {
   const q = new URLSearchParams({
     client_id: required("EBAY_CLIENT_ID"),
     redirect_uri: required("EBAY_RUNAME"),
@@ -36,7 +36,41 @@ export function ebayConsentUrl(state: string) {
     scope: SCOPES,
     state,
   });
+  // Force a fresh eBay sign-in so a second account can be connected in a
+  // browser that's still signed into a previous seller account. Without
+  // this, eBay silently reuses the existing session and returns the SAME
+  // seller's refresh token — which is what caused "3 accounts, 1 user".
+  if (opts.forceLogin) q.set("prompt", "login");
   return `https://auth.ebay.com/oauth2/authorize?${q}`;
+}
+
+// Fetch the connected eBay user's username via the Trading GetUser call.
+// Uses the freshly-issued access token (IAF). Best-effort — returns null on error.
+export async function fetchEbayUsername(accessToken: string): Promise<string | null> {
+  try {
+    const xml = `<?xml version="1.0" encoding="utf-8"?>
+    <GetUserRequest xmlns="urn:ebay:apis:eBLBaseComponents">
+      <ErrorLanguage>en_US</ErrorLanguage><WarningLevel>High</WarningLevel>
+      <DetailLevel>ReturnAll</DetailLevel>
+    </GetUserRequest>`;
+    const res = await fetch(EBAY_TRADING_ENDPOINT, {
+      method: "POST",
+      headers: {
+        "Content-Type": "text/xml",
+        "X-EBAY-API-CALL-NAME": "GetUser",
+        "X-EBAY-API-SITEID": "0",
+        "X-EBAY-API-COMPATIBILITY-LEVEL": "1451",
+        "X-EBAY-API-IAF-TOKEN": accessToken,
+      },
+      body: xml,
+    });
+    const text = await res.text();
+    const m = text.match(/<UserID[^>]*>([\s\S]*?)<\/UserID>/i);
+    const id = m?.[1]?.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1").trim();
+    return id || null;
+  } catch {
+    return null;
+  }
 }
 
 export async function exchangeEbayCode(code: string): Promise<EbayCredential> {

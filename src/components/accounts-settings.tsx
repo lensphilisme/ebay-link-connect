@@ -5,7 +5,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { ExternalLink, Plus, Trash2, Link as LinkIcon } from "lucide-react";
 import {
@@ -29,22 +28,22 @@ export function AccountsSettings() {
     queryFn: () => listFn(),
   });
 
-  const [newName, setNewName] = useState("");
-  const [newRegion, setNewRegion] = useState("US");
-  const [open, setOpen] = useState(false);
-
-  const create = useMutation({
-    mutationFn: () => createFn({ data: { account_name: newName.trim(), region: newRegion.trim() || "US" } }),
-    onSuccess: (row: any) => {
-      toast.success(`Account "${row.account_name}" created — connect it next`);
-      setNewName(""); setOpen(false);
-      qc.invalidateQueries({ queryKey: ["ebay-accounts"] });
+  // Connect a NEW account: create a placeholder row, then jump to eBay OAuth
+  // with the row's id in `state`. The callback renames it from the eBay
+  // username automatically, so users never have to type a nickname.
+  const connectNew = useMutation({
+    mutationFn: async () => {
+      const created: any = await createFn({ data: { account_name: "Pending eBay account", region: "US" } });
+      const url: string = await urlFn({ data: { accountId: created.id, forceLogin: true } });
+      return url;
     },
+    onSuccess: (url: string) => { window.location.assign(url); },
     onError: (e: Error) => toast.error(e.message),
   });
 
-  const connect = useMutation({
-    mutationFn: (accountId: string) => urlFn({ data: { accountId } }),
+  // Reconnect an existing account (also forces a fresh eBay login).
+  const reconnect = useMutation({
+    mutationFn: (accountId: string) => urlFn({ data: { accountId, forceLogin: true } }),
     onSuccess: (url: string) => { window.location.assign(url); },
     onError: (e: Error) => toast.error(e.message),
   });
@@ -72,14 +71,15 @@ export function AccountsSettings() {
   return (
     <div className="space-y-3">
       <p className="text-sm text-muted-foreground">
-        Manage multiple eBay seller accounts under one login. Each account holds its own
-        tokens and can be filtered independently on the dashboard.
+        Each connected eBay seller shows up here. Names are pulled from eBay
+        automatically — one click launches a fresh eBay sign-in so you can
+        connect a second (or third) account cleanly.
       </p>
 
       <div className="space-y-2">
         {accounts.length === 0 && (
           <div className="text-sm text-muted-foreground border rounded-lg p-4 text-center">
-            No accounts yet. Add one below to get started.
+            No accounts yet. Click below to connect your first eBay seller.
           </div>
         )}
         {accounts.map((a: any) => (
@@ -88,53 +88,37 @@ export function AccountsSettings() {
             account={a}
             onRename={(name) => rename.mutate({ id: a.id, account_name: name })}
             onToggle={(v) => toggleActive.mutate({ id: a.id, is_active: v })}
-            onConnect={() => connect.mutate(a.id)}
+            onReconnect={() => reconnect.mutate(a.id)}
             onDelete={() => {
-              if (confirm(`Delete account "${a.account_name}"? Its listings will keep working but lose the account link.`))
+              if (confirm(`Remove "${a.account_name}"? Existing listings stay in your database but lose the account link.`))
                 remove.mutate(a.id);
             }}
-            connecting={connect.isPending}
+            connecting={reconnect.isPending}
           />
         ))}
       </div>
 
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogTrigger asChild>
-          <Button variant="outline" className="w-full">
-            <Plus className="h-4 w-4 mr-2" /> Add another eBay account
-          </Button>
-        </DialogTrigger>
-        <DialogContent>
-          <DialogHeader><DialogTitle>Add eBay account</DialogTitle></DialogHeader>
-          <div className="space-y-3">
-            <div className="space-y-1.5">
-              <Label>Account nickname</Label>
-              <Input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="e.g. US Electronics" />
-            </div>
-            <div className="space-y-1.5">
-              <Label>Region</Label>
-              <Input value={newRegion} onChange={(e) => setNewRegion(e.target.value)} placeholder="US" maxLength={4} />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => setOpen(false)}>Cancel</Button>
-            <Button onClick={() => create.mutate()} disabled={!newName.trim() || create.isPending}>
-              {create.isPending ? "Creating…" : "Create"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <Button
+        variant="outline"
+        className="w-full"
+        onClick={() => connectNew.mutate()}
+        disabled={connectNew.isPending}
+      >
+        <Plus className="h-4 w-4 mr-2" />
+        {connectNew.isPending ? "Opening eBay…" : "Connect another eBay account"}
+        <ExternalLink className="h-3 w-3 ml-2" />
+      </Button>
     </div>
   );
 }
 
 function AccountRow({
-  account, onRename, onToggle, onConnect, onDelete, connecting,
+  account, onRename, onToggle, onReconnect, onDelete, connecting,
 }: {
   account: any;
   onRename: (name: string) => void;
   onToggle: (v: boolean) => void;
-  onConnect: () => void;
+  onReconnect: () => void;
   onDelete: () => void;
   connecting: boolean;
 }) {
@@ -154,13 +138,13 @@ function AccountRow({
             ? "rounded-full bg-success/10 text-success text-xs px-2 py-0.5 font-medium"
             : "rounded-full bg-muted text-muted-foreground text-xs px-2 py-0.5 font-medium"
         }>
-          {account.connected ? "Connected" : "Not connected"}
+          {account.connected ? (account.ebay_user_id || "Connected") : "Not connected"}
         </span>
         <div className="flex items-center gap-2">
           <Label className="text-xs">Active</Label>
           <Switch checked={account.is_active} onCheckedChange={onToggle} />
         </div>
-        <Button size="sm" variant="outline" onClick={onConnect} disabled={connecting}>
+        <Button size="sm" variant="outline" onClick={onReconnect} disabled={connecting}>
           <LinkIcon className="h-3.5 w-3.5 mr-1" />
           {account.connected ? "Reconnect" : "Connect"}
           <ExternalLink className="h-3 w-3 ml-1" />

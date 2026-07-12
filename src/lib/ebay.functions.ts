@@ -1,6 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
-import { ebayConsentUrl, exchangeEbayCode, fetchActiveEbayListings, fetchItemImagesShopping, getCategorySuggestions, getEbayCategoryTreeShallow, getFreshEbayToken, publishInventoryItem, reviseEbayListingText, endEbayFixedPriceListing } from "./ebay.server";
+import { ebayConsentUrl, exchangeEbayCode, fetchActiveEbayListings, fetchEbayUsername, fetchItemImagesShopping, getCategorySuggestions, getEbayCategoryTreeShallow, getFreshEbayToken, publishInventoryItem, reviseEbayListingText, endEbayFixedPriceListing } from "./ebay.server";
 
 // Scrub the "Ban [anything] the sale of amazon" phrase eBay policy titles.
 // The phrase sometimes shows up truncated as just "Ban ", "Ban of", "Ban of the",
@@ -231,10 +231,12 @@ function encodeOAuthState(payload: { u: string; a?: string | null }) {
 
 export const getEbayConnectUrl = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: { accountId?: string } | undefined) => input ?? {})
+  .inputValidator((input: { accountId?: string; forceLogin?: boolean } | undefined) => input ?? {})
   .handler(async ({ data, context }: any) => {
     const state = encodeOAuthState({ u: context.userId, a: data?.accountId || null });
-    return ebayConsentUrl(state);
+    // Default to forcing a fresh eBay login so users can connect a second
+    // seller account without eBay silently reusing the first one's session.
+    return ebayConsentUrl(state, { forceLogin: data?.forceLogin !== false });
   });
 
 export const connectEbayWithCode = createServerFn({ method: "POST" })
@@ -243,22 +245,50 @@ export const connectEbayWithCode = createServerFn({ method: "POST" })
   .handler(async ({ data, context }: any) => {
     const creds = await exchangeEbayCode(decodeURIComponent(data.code.trim()));
 
+    // Ask eBay who this token belongs to — we use the seller UserID as the
+    // account nickname so multiple accounts are visibly distinct.
+    const ebayUsername = creds.access_token ? await fetchEbayUsername(creds.access_token) : null;
+
+    // Guard: if a DIFFERENT account row on this user already holds this
+    // eBay UserID, the browser re-used the previous session. Reject rather
+    // than silently overwriting or duplicating.
+    if (ebayUsername) {
+      const { data: dup } = await context.supabase
+        .from("ebay_accounts")
+        .select("id, account_name")
+        .eq("user_id", context.userId)
+        .eq("ebay_user_id", ebayUsername)
+        .maybeSingle();
+      if (dup?.id && data.accountId && dup.id !== data.accountId) {
+        throw new Error(
+          `This browser is still signed into eBay as "${ebayUsername}", which is already linked to your "${dup.account_name}" account. Sign out of eBay in another tab (or open an incognito window) and try again.`,
+        );
+      }
+      // No explicit target account, but a row for this UserID already exists —
+      // update THAT row instead of creating a duplicate.
+      if (dup?.id && !data.accountId) data = { ...data, accountId: dup.id };
+    }
+
     // Multi-account write path — always land tokens on ebay_accounts.
     let accountId = data.accountId || null;
+    const desiredName = ebayUsername || data.accountName || "eBay account";
     if (!accountId) {
       // Prefer the existing default account, else create one.
       const { data: existing } = await context.supabase
         .from("ebay_accounts")
-        .select("id")
+        .select("id, ebay_user_id")
         .eq("user_id", context.userId)
         .order("created_at", { ascending: true })
         .limit(1)
         .maybeSingle();
-      if (existing?.id) accountId = existing.id;
-      else {
+      // Only reuse the existing "Default" row if it has no eBay identity yet,
+      // OR if this connect resolves to the SAME eBay UserID.
+      if (existing?.id && (!existing.ebay_user_id || existing.ebay_user_id === ebayUsername)) {
+        accountId = existing.id;
+      } else {
         const { data: created, error: cErr } = await context.supabase
           .from("ebay_accounts")
-          .insert({ user_id: context.userId, account_name: data.accountName || "Default", is_active: true })
+          .insert({ user_id: context.userId, account_name: desiredName, is_active: true })
           .select("id")
           .single();
         if (cErr) throw cErr;
@@ -266,14 +296,19 @@ export const connectEbayWithCode = createServerFn({ method: "POST" })
       }
     }
 
+    const patch: any = {
+      access_token: creds.access_token,
+      refresh_token: creds.refresh_token,
+      token_expires_at: creds.expires_at ? new Date(creds.expires_at).toISOString() : null,
+      is_active: true,
+    };
+    if (ebayUsername) {
+      patch.ebay_user_id = ebayUsername;
+      patch.account_name = ebayUsername;
+    }
     const { error: uErr } = await context.supabase
       .from("ebay_accounts")
-      .update({
-        access_token: creds.access_token,
-        refresh_token: creds.refresh_token,
-        token_expires_at: creds.expires_at ? new Date(creds.expires_at).toISOString() : null,
-        is_active: true,
-      })
+      .update(patch)
       .eq("id", accountId)
       .eq("user_id", context.userId);
     if (uErr) throw uErr;
@@ -292,7 +327,7 @@ export const connectEbayWithCode = createServerFn({ method: "POST" })
     if (existingCred?.id) await context.supabase.from("integration_credentials").update(row).eq("id", existingCred.id);
     else await context.supabase.from("integration_credentials").insert(row);
 
-    return { ok: true, account_id: accountId };
+    return { ok: true, account_id: accountId, ebay_user_id: ebayUsername };
   });
 
 export const syncEbayListings = createServerFn({ method: "POST" })
@@ -567,10 +602,20 @@ export const pushDraftsToEbay = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((data: { draftIds: string[] }) => data)
   .handler(async ({ data, context }: any) => {
-    const token = await getFreshEbayToken(context.supabase, context.userId);
+    const { getFreshEbayTokenForAccount } = await import("./ebay.server");
     const { data: drafts, error } = await context.supabase.from("listing_drafts").select("*").eq("user_id", context.userId).in("id", data.draftIds);
     if (error) throw error;
     const { data: rule } = await context.supabase.from("automation_rules").select("max_listing_quantity,round_to").eq("user_id", context.userId).maybeSingle();
+    // Cache one token per account so each draft publishes to its assigned seller.
+    const tokenCache = new Map<string | null, string>();
+    const tokenFor = async (accountId: string | null | undefined): Promise<string> => {
+      const key = accountId || null;
+      const cached = tokenCache.get(key);
+      if (cached) return cached;
+      const t = await getFreshEbayTokenForAccount(context.supabase, context.userId, key || undefined);
+      tokenCache.set(key, t);
+      return t;
+    };
     const results = [];
     for (const draft of drafts || []) {
       try {
@@ -620,6 +665,7 @@ export const pushDraftsToEbay = createServerFn({ method: "POST" })
             // Enforce automation_rules right before publish so any auto-repair,
             // variant hydration, or draft edits are covered on every retry.
             const ruleAdjusted = applyRuleToDraft(workingDraft, rule);
+            const token = await tokenFor(draft.account_id);
             pushed = await publishInventoryItem(token, ruleAdjusted);
             workingDraft = ruleAdjusted;
             lastError = null;
@@ -638,7 +684,7 @@ export const pushDraftsToEbay = createServerFn({ method: "POST" })
           throw new Error(`eBay did not confirm all ${expectedVariants} variants were published. Nothing was marked pushed.`);
         }
 
-        await context.supabase.from("ebay_listings").insert({ user_id: context.userId, draft_id: draft.id, ebay_item_id: pushed.listingId, ebay_offer_id: pushed.offerId, sku: workingDraft.sku, title: workingDraft.title, price: workingDraft.price, cj_product_id: workingDraft.cj_product_id, status: "active", cj_landed_cost: Number((workingDraft.profit || {}).item_cost || 0) + Number((workingDraft.profit || {}).shipping || 0) });
+        await context.supabase.from("ebay_listings").insert({ user_id: context.userId, account_id: draft.account_id || null, draft_id: draft.id, ebay_item_id: pushed.listingId, ebay_offer_id: pushed.offerId, sku: workingDraft.sku, title: workingDraft.title, price: workingDraft.price, cj_product_id: workingDraft.cj_product_id, status: "active", cj_landed_cost: Number((workingDraft.profit || {}).item_cost || 0) + Number((workingDraft.profit || {}).shipping || 0) });
         // Auto-remove pushed draft from queue.
         await context.supabase.from("listing_drafts").delete().eq("id", draft.id);
         await context.supabase.from("activity_logs").insert({ user_id: context.userId, level: "success", category: "ebay", message: `Pushed to eBay: ${workingDraft.title}`, metadata: { draftId: draft.id, listingId: pushed.listingId, offerId: pushed.offerId, variants: expectedVariants || 1 } });

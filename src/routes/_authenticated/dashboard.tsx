@@ -7,7 +7,7 @@ import { useServerFn } from "@tanstack/react-start";
 import { getIntegrationStatus } from "@/lib/cj.functions";
 import { getAccountsOverview } from "@/lib/accounts.functions";
 import { supabase } from "@/integrations/supabase/client";
-import { ArrowRight, Boxes, FileEdit, Tag, KeyRound, PackageSearch, TrendingUp } from "lucide-react";
+import { ArrowRight, Boxes, FileEdit, Tag, KeyRound, PackageSearch, TrendingUp, DollarSign, Eye } from "lucide-react";
 import { AccountSwitcher } from "@/components/account-switcher";
 import { useActiveAccountId } from "@/lib/active-account";
 
@@ -52,55 +52,72 @@ function DashboardPage() {
   });
 
   const integrations = [status?.cj.connected, status?.ebay.connected, true].filter(Boolean).length;
+  const accountsList = overview?.accounts ?? [];
+  const activeAccount = activeAccountId ? accountsList.find((a: any) => a.id === activeAccountId) : null;
 
-  const stats = [
-    { Icon: FileEdit, label: "Drafts pending", v: counts?.draftsPending ?? 0, hint: `${counts?.draftsFailed ?? 0} failed` },
-    { Icon: Tag, label: "Active listings", v: counts?.listingsActive ?? 0, hint: `${counts?.listingsTotal ?? 0} tracked` },
-    { Icon: TrendingUp, label: "Units sold", v: counts?.totalSales ?? 0, hint: `${counts?.totalViews ?? 0} watchers` },
-    { Icon: KeyRound, label: "Integrations", v: `${integrations}/3`, hint: status?.ebay.connected ? "eBay OK" : "connect eBay" },
+  const stats: {
+    Icon: typeof FileEdit;
+    label: string;
+    v: string | number;
+    hint: string;
+    tint: string;
+  }[] = [
+    { Icon: DollarSign, label: "Revenue (GMV)", v: `$${(counts?.gmv ?? 0).toFixed(2)}`, hint: `${counts?.totalSales ?? 0} units sold`, tint: "from-emerald-500/20 to-emerald-500/5 text-emerald-500 ring-emerald-500/20" },
+    { Icon: Tag, label: "Active listings", v: counts?.listingsActive ?? 0, hint: `${counts?.listingsTotal ?? 0} tracked`, tint: "from-violet-500/20 to-violet-500/5 text-violet-500 ring-violet-500/20" },
+    { Icon: FileEdit, label: "Drafts pending", v: counts?.draftsPending ?? 0, hint: `${counts?.draftsFailed ?? 0} failed`, tint: "from-amber-500/20 to-amber-500/5 text-amber-500 ring-amber-500/20" },
+    { Icon: Eye, label: "Watchers", v: counts?.totalViews ?? 0, hint: `${integrations}/3 integrations`, tint: "from-sky-500/20 to-sky-500/5 text-sky-500 ring-sky-500/20" },
   ];
 
-  const accountsList = overview?.accounts ?? [];
-
   return (
-    <AppShell title="Dashboard" subtitle="Overview of your CJ → eBay pipeline" actions={<AccountSwitcher />}>
+    <AppShell
+      title={activeAccount ? activeAccount.account_name : "Dashboard"}
+      subtitle={activeAccount ? "Single-account view" : "Every connected eBay seller in one place"}
+      actions={<AccountSwitcher />}
+    >
+      {/* Luxury stat strip */}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         {stats.map((s) => (
-          <Card key={s.label} className="shadow-[var(--shadow-card)]">
+          <Card
+            key={s.label}
+            className={`relative overflow-hidden border-0 ring-1 ${s.tint.split(" ").pop()} bg-gradient-to-br ${s.tint.split(" ").slice(0, 2).join(" ")} shadow-[var(--shadow-card)]`}
+          >
+            <div className="absolute -right-4 -top-4 h-20 w-20 rounded-full bg-white/5 blur-2xl" />
             <CardHeader className="pb-2 flex flex-row items-center justify-between space-y-0 p-3 sm:p-4">
-              <CardTitle className="text-xs sm:text-sm font-medium text-muted-foreground">{s.label}</CardTitle>
-              <s.Icon className="h-4 w-4 text-muted-foreground" />
+              <CardTitle className="text-xs sm:text-sm font-medium text-foreground/70">{s.label}</CardTitle>
+              <div className={`h-8 w-8 rounded-lg bg-background/60 backdrop-blur flex items-center justify-center ${s.tint.split(" ").find((c) => c.startsWith("text-"))}`}>
+                <s.Icon className="h-4 w-4" />
+              </div>
             </CardHeader>
             <CardContent className="p-3 pt-0 sm:p-4 sm:pt-0">
               <div className="text-2xl sm:text-3xl font-bold tracking-tight">{s.v}</div>
-              <div className="text-xs text-muted-foreground mt-1">{s.hint}</div>
+              <div className="text-xs text-foreground/60 mt-1">{s.hint}</div>
             </CardContent>
           </Card>
         ))}
       </div>
 
-      {accountsList.length > 0 && (
-        <div className="mt-8">
+      {/* Account grid — only when viewing ALL accounts and more than one exists */}
+      {!activeAccountId && accountsList.length > 1 && (
+        <div className="mt-6">
           <div className="flex items-center justify-between mb-3">
-            <h2 className="text-sm font-semibold">All accounts</h2>
-            <span className="text-xs text-muted-foreground">
-              {activeAccountId ? "Filter active — clear switcher to see all" : "Showing every connected account"}
-            </span>
+            <h2 className="text-sm font-semibold">Accounts at a glance</h2>
+            <span className="text-xs text-muted-foreground">{accountsList.length} connected</span>
           </div>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {accountsList.map((a: any) => (
-              <Card key={a.id} className={activeAccountId === a.id ? "border-primary shadow-[var(--shadow-card)]" : "shadow-[var(--shadow-card)]"}>
+              <Card key={a.id} className="relative overflow-hidden shadow-[var(--shadow-card)] border-border/60 hover:border-primary/50 transition-colors">
+                <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-primary via-violet-500 to-emerald-500" />
                 <CardHeader className="pb-2 p-3 sm:p-4">
                   <div className="flex items-center justify-between">
                     <CardTitle className="text-sm font-semibold truncate">{a.account_name}</CardTitle>
                     {!a.is_active && <span className="text-[10px] rounded-full bg-muted text-muted-foreground px-2 py-0.5">paused</span>}
                   </div>
                 </CardHeader>
-                <CardContent className="p-3 pt-0 sm:p-4 sm:pt-0 space-y-1 text-xs text-muted-foreground">
-                  <div className="flex justify-between"><span>Active listings</span><span className="font-medium text-foreground">{a.listings_active}</span></div>
-                  <div className="flex justify-between"><span>Units sold</span><span className="font-medium text-foreground">{a.units_sold}</span></div>
-                  <div className="flex justify-between"><span>Drafts pending</span><span className="font-medium text-foreground">{a.drafts_pending}</span></div>
-                  <div className="flex justify-between"><span>GMV</span><span className="font-medium text-foreground">${Number(a.gmv || 0).toFixed(2)}</span></div>
+                <CardContent className="p-3 pt-0 sm:p-4 sm:pt-0 grid grid-cols-2 gap-2 text-xs">
+                  <Metric label="Active" value={a.listings_active} />
+                  <Metric label="Sold" value={a.units_sold} />
+                  <Metric label="Drafts" value={a.drafts_pending} />
+                  <Metric label="GMV" value={`$${Number(a.gmv || 0).toFixed(0)}`} accent />
                 </CardContent>
               </Card>
             ))}
@@ -108,15 +125,15 @@ function DashboardPage() {
         </div>
       )}
 
-      <div className="mt-8 grid gap-4 lg:grid-cols-3">
+      <div className="mt-6 grid gap-4 lg:grid-cols-3">
         <Card className="lg:col-span-2 shadow-[var(--shadow-card)]">
           <CardHeader><CardTitle>Recent activity</CardTitle></CardHeader>
           <CardContent className="space-y-2">
             {(counts?.logs || []).length === 0 ? (
-              <p className="text-sm text-muted-foreground">No activity yet. Sync eBay or push a draft to see events here.</p>
+              <p className="text-sm text-muted-foreground">No activity yet. Push a draft to see events here.</p>
             ) : counts!.logs.map((l: any) => (
               <div key={l.id} className="flex items-start gap-3 text-sm border-b border-border/60 last:border-0 py-2">
-                <span className={`mt-1 h-2 w-2 rounded-full shrink-0 ${l.level === "success" ? "bg-success" : l.level === "error" ? "bg-destructive" : "bg-muted-foreground"}`} />
+                <span className={`mt-1 h-2 w-2 rounded-full shrink-0 ${l.level === "success" ? "bg-emerald-500" : l.level === "error" ? "bg-destructive" : "bg-muted-foreground"}`} />
                 <div className="flex-1">
                   <div>{l.message}</div>
                   <div className="text-xs text-muted-foreground">{new Date(l.created_at).toLocaleString()}</div>
@@ -126,17 +143,25 @@ function DashboardPage() {
           </CardContent>
         </Card>
 
-        <Card className="shadow-[var(--shadow-card)]">
+        <Card className="shadow-[var(--shadow-card)] bg-gradient-to-br from-primary/5 to-transparent">
           <CardHeader><CardTitle>Quick actions</CardTitle></CardHeader>
           <CardContent className="space-y-2">
             <Button asChild className="w-full justify-between"><Link to="/products">Search CJ <PackageSearch className="h-4 w-4" /></Link></Button>
             <Button asChild variant="outline" className="w-full justify-between"><Link to="/drafts">Review drafts <ArrowRight className="h-4 w-4" /></Link></Button>
-            <Button asChild variant="outline" className="w-full justify-between"><Link to="/listings">Sync eBay <ArrowRight className="h-4 w-4" /></Link></Button>
-            <Button asChild variant="outline" className="w-full justify-between"><Link to="/optimizer">Run optimizer <ArrowRight className="h-4 w-4" /></Link></Button>
-            <Button asChild variant="ghost" className="w-full justify-between"><Link to="/settings">Integrations <Boxes className="h-4 w-4" /></Link></Button>
+            <Button asChild variant="outline" className="w-full justify-between"><Link to="/optimizer">Run optimizer <TrendingUp className="h-4 w-4" /></Link></Button>
+            <Button asChild variant="ghost" className="w-full justify-between"><Link to="/settings">Integrations & rules <Boxes className="h-4 w-4" /></Link></Button>
           </CardContent>
         </Card>
       </div>
     </AppShell>
+  );
+}
+
+function Metric({ label, value, accent }: { label: string; value: React.ReactNode; accent?: boolean }) {
+  return (
+    <div className={`rounded-md px-2 py-1.5 ${accent ? "bg-emerald-500/10 text-emerald-600" : "bg-muted/50"}`}>
+      <div className="text-[10px] uppercase tracking-wide opacity-70">{label}</div>
+      <div className="font-semibold">{value}</div>
+    </div>
   );
 }
