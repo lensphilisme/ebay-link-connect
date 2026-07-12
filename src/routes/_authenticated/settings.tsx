@@ -8,12 +8,14 @@ import { useServerFn } from "@tanstack/react-start";
 import { connectEbayWithCode, getEbayConnectUrl } from "@/lib/ebay.functions";
 import { saveCjApiKey, getIntegrationStatus } from "@/lib/cj.functions";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
-import { KeyRound, Boxes, Tag, ExternalLink, Type, Globe, Sliders, Sparkles } from "lucide-react";
+import { KeyRound, Boxes, Tag, ExternalLink, Type, Globe, Sliders, Sparkles, Users, Route as RouteIcon } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { TypographySettings } from "@/components/typography-settings";
 import { AppUrlSettings } from "@/components/app-url-settings";
 import { RulesSettings } from "@/components/rules-settings";
+import { AccountsSettings } from "@/components/accounts-settings";
+import { AccountRulesSettings } from "@/components/account-rules-settings";
 
 export const Route = createFileRoute("/_authenticated/settings")({ component: SettingsPage });
 
