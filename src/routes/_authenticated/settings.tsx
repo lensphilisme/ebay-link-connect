@@ -1,17 +1,19 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { AppShell } from "@/components/app-shell";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { connectEbayWithCode, getEbayConnectUrl } from "@/lib/ebay.functions";
 import { saveCjApiKey, getIntegrationStatus } from "@/lib/cj.functions";
-import { supabase } from "@/integrations/supabase/client";
-import { KeyRound, Boxes, Tag, ExternalLink } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
+import { KeyRound, Boxes, Tag, ExternalLink, Type, Globe, Sliders, Sparkles } from "lucide-react";
+import { useState } from "react";
 import { toast } from "sonner";
 import { TypographySettings } from "@/components/typography-settings";
+import { AppUrlSettings } from "@/components/app-url-settings";
+import { RulesSettings } from "@/components/rules-settings";
 
 export const Route = createFileRoute("/_authenticated/settings")({ component: SettingsPage });
 
@@ -28,12 +30,17 @@ function SettingsPage() {
     queryKey: ["integration-status"],
     queryFn: () => statusFn(),
   });
-  const ebayCred = { is_active: !!status?.ebay.connected, source: status?.ebay.source };
-  const cjCred = { is_active: !!status?.cj.connected, source: status?.cj.source };
+  const ebayReady = !!status?.ebay.connected;
+  const cjReady = !!status?.cj.connected;
+  const cjSource = status?.cj.source;
 
   const openOAuth = useMutation({
     mutationFn: () => urlFn(),
-    onSuccess: (url: string) => { window.open(url, "_blank", "noopener,noreferrer"); toast.info("Complete sign-in on eBay; you'll be redirected back automatically."); },
+    onSuccess: (url: string) => {
+      // Same-tab navigation so the eBay callback lands back in this session
+      // and can auto-exchange the code — no manual paste required.
+      window.location.assign(url);
+    },
     onError: (e: Error) => toast.error(e.message),
   });
   const connect = useMutation({
@@ -48,99 +55,133 @@ function SettingsPage() {
   });
 
   return (
-    <AppShell title="Settings" subtitle="Integrations, profile and workspace preferences">
-      <div className="grid gap-4 lg:grid-cols-2">
-        <TypographySettings />
-        <IntegrationCard
-          icon={Boxes}
-          title="CJ Dropshipping"
-          desc="Enter your CJ account email and API key once — the app fetches, refreshes and renews access tokens automatically in the background."
-          status={cjCred.is_active ? (cjCred.source === "env" ? "Connected (workspace key)" : "Connected") : "Not connected"}
-          ready={cjCred.is_active}
-        >
-          <div className="space-y-2">
-            <Input
-              type="email"
-              value={cjEmail}
-              onChange={(e) => setCjEmail(e.target.value)}
-              placeholder={status?.cj.email || "CJ account email"}
-            />
-            <div className="flex gap-2">
+    <AppShell title="Settings" subtitle="Integrations, workspace preferences and rules">
+      <Card className="shadow-[var(--shadow-card)] p-2 sm:p-4">
+        <Accordion type="multiple" defaultValue={["typography"]} className="w-full">
+          <Section value="typography" icon={Type} title="Typography" status="Site-wide font">
+            <TypographySettings />
+          </Section>
+
+          <Section value="app-url" icon={Globe} title="App URL" status="Live domain">
+            <AppUrlSettings />
+          </Section>
+
+          <Section
+            value="cj"
+            icon={Boxes}
+            title="CJ Dropshipping"
+            status={cjReady ? (cjSource === "env" ? "Connected (workspace key)" : "Connected") : "Not connected"}
+            ready={cjReady}
+          >
+            <div className="space-y-2">
               <Input
-                type="password"
-                value={cjApiKey}
-                onChange={(e) => setCjApiKey(e.target.value)}
-                placeholder="CJ API key"
+                type="email"
+                value={cjEmail}
+                onChange={(e) => setCjEmail(e.target.value)}
+                placeholder={status?.cj.email || "CJ account email"}
               />
-              <Button onClick={() => saveCj.mutate()} disabled={!cjApiKey || (!cjEmail && !status?.cj.email) || saveCj.isPending}>
-                {saveCj.isPending ? "Connecting…" : "Save"}
+              <div className="flex gap-2">
+                <Input
+                  type="password"
+                  value={cjApiKey}
+                  onChange={(e) => setCjApiKey(e.target.value)}
+                  placeholder="CJ API key"
+                />
+                <Button onClick={() => saveCj.mutate()} disabled={!cjApiKey || (!cjEmail && !status?.cj.email) || saveCj.isPending}>
+                  {saveCj.isPending ? "Connecting…" : "Save"}
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Get your API key at{" "}
+                <a className="text-primary underline inline-flex items-center gap-1" href="https://developers.cjdropshipping.com" target="_blank" rel="noreferrer">
+                  developers.cjdropshipping.com <ExternalLink className="h-3 w-3" />
+                </a>{" "}— My API → API key. Access &amp; refresh tokens are handled for you.
+              </p>
+            </div>
+          </Section>
+
+          <Section
+            value="ebay"
+            icon={Tag}
+            title="eBay"
+            status={ebayReady ? "Connected" : "Needs OAuth"}
+            ready={ebayReady}
+          >
+            <div className="space-y-3">
+              <Button onClick={() => openOAuth.mutate()} disabled={openOAuth.isPending}>
+                {openOAuth.isPending ? "Opening…" : "Connect your eBay account"}
+                <ExternalLink className="h-3 w-3 ml-2" />
               </Button>
+              <p className="text-xs text-muted-foreground">
+                You'll be redirected to eBay to approve access, then automatically sent
+                back and connected — no code to copy.
+              </p>
+              <details className="text-xs">
+                <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
+                  Having trouble? Paste an authorization code manually
+                </summary>
+                <div className="flex gap-2 mt-2">
+                  <Input value={code} onChange={(e) => setCode(e.target.value)} placeholder="Authorization code" />
+                  <Button variant="outline" onClick={() => connect.mutate()} disabled={!code || connect.isPending}>Save</Button>
+                </div>
+              </details>
+              <div className="mt-2 rounded-md border bg-muted/40 p-3 text-xs space-y-1">
+                <div className="font-medium">Before bulk push you must:</div>
+                <ul className="list-disc ml-4 space-y-0.5">
+                  <li>Opt in to eBay Business Policies → <a className="text-primary underline" target="_blank" rel="noreferrer" href="https://www.bizpolicy.ebay.com/businesspolicy/manage">bizpolicy.ebay.com</a></li>
+                  <li>Create a default payment, shipping and return policy</li>
+                  <li>Enable the Live Push switch in the Rules section below</li>
+                </ul>
+              </div>
             </div>
-            <p className="text-xs text-muted-foreground">
-              Get your API key at{" "}
-              <a className="text-primary underline inline-flex items-center gap-1" href="https://developers.cjdropshipping.com" target="_blank" rel="noreferrer">
-                developers.cjdropshipping.com <ExternalLink className="h-3 w-3" />
-              </a>{" "}— My API → API key. Access &amp; refresh tokens are handled for you.
+          </Section>
+
+          <Section value="ai" icon={KeyRound} title="Lovable AI (built-in)" status="Ready" ready>
+            <p className="text-sm text-muted-foreground">
+              Powers title rewrites, item-specifics guessing and category suggestions.
+              No key needed — included with your workspace.
             </p>
-          </div>
-        </IntegrationCard>
+          </Section>
 
-
-        <IntegrationCard
-          icon={Tag}
-          title="eBay"
-          desc="Connect any seller account with eBay login. No per-user API keys, client secrets or refresh tokens are needed."
-          status={ebayCred.is_active ? "Connected" : "Needs OAuth"}
-          ready={ebayCred.is_active}
-        >
-          <div className="space-y-2">
-            <Button variant="outline" onClick={() => openOAuth.mutate()} disabled={openOAuth.isPending}>
-              Open eBay OAuth <ExternalLink className="h-3 w-3 ml-1" />
-            </Button>
-            <p className="text-xs text-muted-foreground">
-              eBay redirects back here and stores the seller token automatically for the signed-in app user.
-            </p>
-            <div className="flex gap-2">
-              <Input value={code} onChange={(e) => setCode(e.target.value)} placeholder="Optional: paste authorization code" />
-              <Button onClick={() => connect.mutate()} disabled={!code || connect.isPending}>Save</Button>
-            </div>
-            <div className="mt-2 rounded-md border bg-muted/40 p-3 text-xs space-y-1">
-              <div className="font-medium">Before bulk push you must:</div>
-              <ul className="list-disc ml-4 space-y-0.5">
-                <li>Opt in to eBay Business Policies → <a className="text-primary underline" target="_blank" rel="noreferrer" href="https://www.bizpolicy.ebay.com/businesspolicy/manage">bizpolicy.ebay.com</a></li>
-                <li>Create a default payment, shipping and return policy</li>
-                <li>Enable the Live Push switch on the Rules page</li>
-              </ul>
-            </div>
-          </div>
-        </IntegrationCard>
-
-        <IntegrationCard
-          icon={KeyRound}
-          title="Lovable AI (built-in)"
-          desc="Powers title rewrites, item-specifics guessing and category suggestions. No key needed — included with your workspace."
-          status="Ready"
-          ready
-        />
-      </div>
+          <Section value="rules" icon={Sliders} title="Rules" status="Pricing & optimizer">
+            <RulesSettings />
+          </Section>
+        </Accordion>
+      </Card>
     </AppShell>
   );
 }
 
-function IntegrationCard({ icon: Icon, title, desc, status, ready, children }: {
-  icon: typeof KeyRound; title: string; desc: string; status: string; ready?: boolean; children?: ReactNode;
+function Section({
+  value, icon: Icon, title, status, ready, children,
+}: {
+  value: string;
+  icon: typeof Sparkles;
+  title: string;
+  status: string;
+  ready?: boolean;
+  children: React.ReactNode;
 }) {
   return (
-    <Card className="shadow-[var(--shadow-card)]">
-      <CardHeader className="flex flex-row items-start gap-4 space-y-0">
-        <div className="h-10 w-10 rounded-lg bg-primary/10 text-primary flex items-center justify-center"><Icon className="h-5 w-5" /></div>
-        <div className="flex-1">
-          <CardTitle>{title}</CardTitle>
-          <CardDescription className="mt-1">{desc}</CardDescription>
+    <AccordionItem value={value} className="border-b last:border-b-0">
+      <AccordionTrigger className="hover:no-underline px-2 py-4">
+        <div className="flex items-center gap-3 flex-1 min-w-0">
+          <div className="h-9 w-9 rounded-lg bg-primary/10 text-primary flex items-center justify-center shrink-0">
+            <Icon className="h-4 w-4" />
+          </div>
+          <span className="font-medium text-left truncate">{title}</span>
+          <span
+            className={
+              ready
+                ? "ml-auto rounded-full bg-success/10 text-success text-xs px-2 py-0.5 font-medium shrink-0"
+                : "ml-auto rounded-full bg-muted text-muted-foreground text-xs px-2 py-0.5 font-medium shrink-0"
+            }
+          >
+            {status}
+          </span>
         </div>
-        <span className={ready ? "rounded-full bg-success/10 text-success text-xs px-2 py-0.5 font-medium" : "rounded-full bg-muted text-muted-foreground text-xs px-2 py-0.5 font-medium"}>{status}</span>
-      </CardHeader>
-      <CardContent>{children ?? <Button variant="outline" disabled>{ready ? "Built-in" : "Configured"}</Button>}</CardContent>
-    </Card>
+      </AccordionTrigger>
+      <AccordionContent className="px-2 pb-4">{children}</AccordionContent>
+    </AccordionItem>
   );
 }
