@@ -111,12 +111,42 @@ export const bulkSendCjToDrafts = createServerFn({ method: "POST" })
     const feePct = Number(rule?.ebay_fee_buffer_percent ?? 17) / 100;
     const targetQty = Math.max(1, Number(rule?.max_listing_quantity ?? 1));
 
+    // Load account routing: cj_category → ebay_accounts.id. When a draft's
+    // CJ category matches a rule, we assign that account. Otherwise fall
+    // back to the user's first active connected account so downstream
+    // dashboards can still filter cleanly.
+    const [{ data: rules }, { data: accts }] = await Promise.all([
+      context.supabase.from("account_rules").select("account_id, cj_category").eq("user_id", context.userId),
+      context.supabase
+        .from("ebay_accounts")
+        .select("id, is_active, refresh_token, created_at")
+        .eq("user_id", context.userId)
+        .order("created_at", { ascending: true }),
+    ]);
+    const ruleMap = new Map<string, string>();
+    for (const r of rules || []) if (r.cj_category) ruleMap.set(String(r.cj_category).trim().toLowerCase(), r.account_id);
+    const defaultAccountId: string | null =
+      (accts || []).find((a: any) => a.is_active && a.refresh_token)?.id
+      || (accts || [])[0]?.id
+      || null;
+    const routeAccount = (cjCategoryName: string | null | undefined): string | null => {
+      const cat = String(cjCategoryName || "").trim();
+      if (!cat) return defaultAccountId;
+      // Try full path, then each segment, most specific first.
+      const segments = cat.split(/[\/>|,]/).map((s) => s.trim()).filter(Boolean);
+      const candidates = [cat, ...segments.reverse()];
+      for (const c of candidates) {
+        const hit = ruleMap.get(c.toLowerCase());
+        if (hit) return hit;
+      }
+      return defaultAccountId;
+    };
 
     // Best-effort: fetch an eBay token once so we can auto-suggest a category per draft.
     let ebayToken: string | null = null;
     try { ebayToken = await getFreshEbayToken(context.supabase, context.userId); } catch { ebayToken = null; }
 
-    const results: { pid: string; ok: boolean; carrier?: string; shipping?: number; error?: string; draftId?: string; categoryId?: string | null }[] = [];
+    const results: { pid: string; ok: boolean; carrier?: string; shipping?: number; error?: string; draftId?: string; categoryId?: string | null; accountId?: string | null }[] = [];
     // Fetch details/freight in small parallel batches to keep it fast without hammering CJ.
     const batchSize = 4;
     for (let i = 0; i < pids.length; i += batchSize) {
