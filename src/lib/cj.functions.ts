@@ -171,11 +171,13 @@ export const bulkSendCjToDrafts = createServerFn({ method: "POST" })
             sku: first?.variantSku || detail?.productSku || pid,
             title,
             price: Number(finalSell.toFixed(2)),
+            quantity: targetQty,
             images,
             description: stripBanAmazon(detail?.description ?? ""),
             status: "pending" as const,
             category_id: categoryId,
             item_specifics: { Brand: "Unbranded", Condition: "New" },
+
             profit: {
               item_cost: itemCost,
               shipping: Number(shipping.toFixed(2)),
