@@ -145,6 +145,14 @@ function SettingsPage() {
             </p>
           </Section>
 
+          <Section value="accounts" icon={Users} title="eBay accounts" status="Multi-account">
+            <AccountsSettings />
+          </Section>
+
+          <Section value="account-rules" icon={RouteIcon} title="Account routing rules" status="CJ → eBay">
+            <AccountRulesSettings />
+          </Section>
+
           <Section value="rules" icon={Sliders} title="Rules" status="Pricing & optimizer">
             <RulesSettings />
           </Section>
