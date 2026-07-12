@@ -73,6 +73,24 @@ export async function refreshEbayAccessToken(refreshToken: string): Promise<Ebay
 }
 
 export async function getUserEbayCredential(supabase: any, userId: string): Promise<EbayCredential> {
+  // Prefer the multi-account ebay_accounts table (default = oldest active row).
+  const { data: acct } = await supabase
+    .from("ebay_accounts")
+    .select("access_token, refresh_token, token_expires_at")
+    .eq("user_id", userId)
+    .eq("is_active", true)
+    .not("refresh_token", "is", null)
+    .order("created_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  if (acct?.refresh_token) {
+    return {
+      access_token: acct.access_token || undefined,
+      refresh_token: acct.refresh_token,
+      expires_at: acct.token_expires_at ? new Date(acct.token_expires_at).getTime() : undefined,
+    };
+  }
+  // Legacy fallback: integration_credentials
   const { data } = await supabase
     .from("integration_credentials")
     .select("credentials")
@@ -85,10 +103,63 @@ export async function getUserEbayCredential(supabase: any, userId: string): Prom
   return creds;
 }
 
+async function getAccountRowById(supabase: any, userId: string, accountId: string) {
+  const { data, error } = await supabase
+    .from("ebay_accounts")
+    .select("id, access_token, refresh_token, token_expires_at")
+    .eq("id", accountId)
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
+export async function getFreshEbayTokenForAccount(supabase: any, userId: string, accountId?: string | null) {
+  if (accountId) {
+    const row = await getAccountRowById(supabase, userId, accountId);
+    if (!row?.refresh_token) throw new Error("That eBay account isn't connected yet.");
+    const expiresMs = row.token_expires_at ? new Date(row.token_expires_at).getTime() : 0;
+    if (row.access_token && expiresMs > Date.now()) return row.access_token as string;
+    const fresh = await refreshEbayAccessToken(row.refresh_token);
+    await supabase
+      .from("ebay_accounts")
+      .update({
+        access_token: fresh.access_token,
+        token_expires_at: new Date(fresh.expires_at!).toISOString(),
+      })
+      .eq("id", row.id);
+    return fresh.access_token!;
+  }
+  return getFreshEbayToken(supabase, userId);
+}
+
 export async function getFreshEbayToken(supabase: any, userId: string) {
   const creds = await getUserEbayCredential(supabase, userId);
   if (creds.access_token && creds.expires_at && creds.expires_at > Date.now()) return creds.access_token;
   const fresh = await refreshEbayAccessToken(creds.refresh_token!);
+
+  // Try to update the default ebay_accounts row first
+  const { data: acct } = await supabase
+    .from("ebay_accounts")
+    .select("id")
+    .eq("user_id", userId)
+    .eq("is_active", true)
+    .not("refresh_token", "is", null)
+    .order("created_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  if (acct?.id) {
+    await supabase
+      .from("ebay_accounts")
+      .update({
+        access_token: fresh.access_token,
+        token_expires_at: new Date(fresh.expires_at!).toISOString(),
+      })
+      .eq("id", acct.id);
+    return fresh.access_token!;
+  }
+
+  // Legacy write-back
   const row = {
     user_id: userId,
     provider: "ebay",

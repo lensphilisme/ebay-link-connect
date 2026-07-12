@@ -14,8 +14,50 @@ export type Database = {
   }
   public: {
     Tables: {
+      account_rules: {
+        Row: {
+          account_id: string
+          cj_category: string
+          created_at: string
+          id: string
+          is_preferred: boolean
+          region: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          account_id: string
+          cj_category: string
+          created_at?: string
+          id?: string
+          is_preferred?: boolean
+          region?: string | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          account_id?: string
+          cj_category?: string
+          created_at?: string
+          id?: string
+          is_preferred?: boolean
+          region?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "account_rules_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "ebay_accounts"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       activity_logs: {
         Row: {
+          account_id: string | null
           category: string
           created_at: string
           id: string
@@ -25,6 +67,7 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          account_id?: string | null
           category: string
           created_at?: string
           id?: string
@@ -34,6 +77,7 @@ export type Database = {
           user_id: string
         }
         Update: {
+          account_id?: string | null
           category?: string
           created_at?: string
           id?: string
@@ -42,7 +86,15 @@ export type Database = {
           metadata?: Json
           user_id?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "activity_logs_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "ebay_accounts"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       app_settings: {
         Row: {
@@ -182,8 +234,51 @@ export type Database = {
         }
         Relationships: []
       }
+      ebay_accounts: {
+        Row: {
+          access_token: string | null
+          account_name: string
+          created_at: string
+          ebay_user_id: string | null
+          id: string
+          is_active: boolean
+          refresh_token: string | null
+          region: string
+          token_expires_at: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          access_token?: string | null
+          account_name: string
+          created_at?: string
+          ebay_user_id?: string | null
+          id?: string
+          is_active?: boolean
+          refresh_token?: string | null
+          region?: string
+          token_expires_at?: string | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          access_token?: string | null
+          account_name?: string
+          created_at?: string
+          ebay_user_id?: string | null
+          id?: string
+          is_active?: boolean
+          refresh_token?: string | null
+          region?: string
+          token_expires_at?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       ebay_listings: {
         Row: {
+          account_id: string | null
           cj_landed_cost: number | null
           cj_product_id: string | null
           clicks: number
@@ -208,6 +303,7 @@ export type Database = {
           views: number
         }
         Insert: {
+          account_id?: string | null
           cj_landed_cost?: number | null
           cj_product_id?: string | null
           clicks?: number
@@ -232,6 +328,7 @@ export type Database = {
           views?: number
         }
         Update: {
+          account_id?: string | null
           cj_landed_cost?: number | null
           cj_product_id?: string | null
           clicks?: number
@@ -256,6 +353,13 @@ export type Database = {
           views?: number
         }
         Relationships: [
+          {
+            foreignKeyName: "ebay_listings_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "ebay_accounts"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "ebay_listings_draft_id_fkey"
             columns: ["draft_id"]
@@ -309,6 +413,7 @@ export type Database = {
       }
       listing_drafts: {
         Row: {
+          account_id: string | null
           audit_reason: string | null
           brand: string | null
           bullet_features: string[]
@@ -336,6 +441,7 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          account_id?: string | null
           audit_reason?: string | null
           brand?: string | null
           bullet_features?: string[]
@@ -363,6 +469,7 @@ export type Database = {
           user_id: string
         }
         Update: {
+          account_id?: string | null
           audit_reason?: string | null
           brand?: string | null
           bullet_features?: string[]
@@ -389,7 +496,65 @@ export type Database = {
           updated_at?: string
           user_id?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "listing_drafts_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "ebay_accounts"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      listing_queue: {
+        Row: {
+          account_id: string
+          created_at: string
+          draft_id: string | null
+          error: string | null
+          id: string
+          payload: Json
+          processed_at: string | null
+          scheduled_at: string
+          status: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          account_id: string
+          created_at?: string
+          draft_id?: string | null
+          error?: string | null
+          id?: string
+          payload?: Json
+          processed_at?: string | null
+          scheduled_at?: string
+          status?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          account_id?: string
+          created_at?: string
+          draft_id?: string | null
+          error?: string | null
+          id?: string
+          payload?: Json
+          processed_at?: string | null
+          scheduled_at?: string
+          status?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "listing_queue_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "ebay_accounts"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       profiles: {
         Row: {

@@ -5,8 +5,11 @@ import { Button } from "@/components/ui/button";
 import { useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { getIntegrationStatus } from "@/lib/cj.functions";
+import { getAccountsOverview } from "@/lib/accounts.functions";
 import { supabase } from "@/integrations/supabase/client";
 import { ArrowRight, Boxes, FileEdit, Tag, KeyRound, PackageSearch, TrendingUp } from "lucide-react";
+import { AccountSwitcher } from "@/components/account-switcher";
+import { useActiveAccountId } from "@/lib/active-account";
 
 export const Route = createFileRoute("/_authenticated/dashboard")({
   component: DashboardPage,
@@ -14,16 +17,23 @@ export const Route = createFileRoute("/_authenticated/dashboard")({
 
 function DashboardPage() {
   const statusFn = useServerFn(getIntegrationStatus);
+  const overviewFn = useServerFn(getAccountsOverview);
+  const [activeAccountId] = useActiveAccountId();
   const { data: status } = useQuery({ queryKey: ["integration-status"], queryFn: () => statusFn() });
+  const { data: overview } = useQuery({ queryKey: ["accounts-overview"], queryFn: () => overviewFn(), refetchInterval: 60_000 });
 
   const { data: counts } = useQuery({
-    queryKey: ["dashboard-counts"],
+    queryKey: ["dashboard-counts", activeAccountId],
     queryFn: async () => {
-      const [drafts, listings, logs] = await Promise.all([
-        supabase.from("listing_drafts").select("id,status,price", { count: "exact" }),
-        supabase.from("ebay_listings").select("id,status,sales,views,price", { count: "exact" }),
-        supabase.from("activity_logs").select("id,message,level,created_at").order("created_at", { ascending: false }).limit(6),
-      ]);
+      const draftsQ = supabase.from("listing_drafts").select("id,status,price,account_id", { count: "exact" });
+      const listingsQ = supabase.from("ebay_listings").select("id,status,sales,views,price,account_id", { count: "exact" });
+      const logsQ = supabase.from("activity_logs").select("id,message,level,created_at,account_id").order("created_at", { ascending: false }).limit(6);
+      if (activeAccountId) {
+        draftsQ.eq("account_id", activeAccountId);
+        listingsQ.eq("account_id", activeAccountId);
+        logsQ.eq("account_id", activeAccountId);
+      }
+      const [drafts, listings, logs] = await Promise.all([draftsQ, listingsQ, logsQ]);
       const draftRows = drafts.data || [];
       const listingRows = listings.data || [];
       return {
@@ -50,8 +60,10 @@ function DashboardPage() {
     { Icon: KeyRound, label: "Integrations", v: `${integrations}/3`, hint: status?.ebay.connected ? "eBay OK" : "connect eBay" },
   ];
 
+  const accountsList = overview?.accounts ?? [];
+
   return (
-    <AppShell title="Dashboard" subtitle="Overview of your CJ → eBay pipeline">
+    <AppShell title="Dashboard" subtitle="Overview of your CJ → eBay pipeline" actions={<AccountSwitcher />}>
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         {stats.map((s) => (
           <Card key={s.label} className="shadow-[var(--shadow-card)]">
@@ -66,6 +78,35 @@ function DashboardPage() {
           </Card>
         ))}
       </div>
+
+      {accountsList.length > 0 && (
+        <div className="mt-8">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-sm font-semibold">All accounts</h2>
+            <span className="text-xs text-muted-foreground">
+              {activeAccountId ? "Filter active — clear switcher to see all" : "Showing every connected account"}
+            </span>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {accountsList.map((a: any) => (
+              <Card key={a.id} className={activeAccountId === a.id ? "border-primary shadow-[var(--shadow-card)]" : "shadow-[var(--shadow-card)]"}>
+                <CardHeader className="pb-2 p-3 sm:p-4">
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="text-sm font-semibold truncate">{a.account_name}</CardTitle>
+                    {!a.is_active && <span className="text-[10px] rounded-full bg-muted text-muted-foreground px-2 py-0.5">paused</span>}
+                  </div>
+                </CardHeader>
+                <CardContent className="p-3 pt-0 sm:p-4 sm:pt-0 space-y-1 text-xs text-muted-foreground">
+                  <div className="flex justify-between"><span>Active listings</span><span className="font-medium text-foreground">{a.listings_active}</span></div>
+                  <div className="flex justify-between"><span>Units sold</span><span className="font-medium text-foreground">{a.units_sold}</span></div>
+                  <div className="flex justify-between"><span>Drafts pending</span><span className="font-medium text-foreground">{a.drafts_pending}</span></div>
+                  <div className="flex justify-between"><span>GMV</span><span className="font-medium text-foreground">${Number(a.gmv || 0).toFixed(2)}</span></div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="mt-8 grid gap-4 lg:grid-cols-3">
         <Card className="lg:col-span-2 shadow-[var(--shadow-card)]">
