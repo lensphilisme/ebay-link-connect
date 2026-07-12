@@ -563,19 +563,28 @@ async function ensureInventoryLocation(accessToken: string, draft: any) {
 }
 
 // Fetch required/recommended aspects for a category via eBay Taxonomy API.
-export async function getItemAspectsForCategory(accessToken: string, categoryId: string, marketplaceId = "EBAY_US") {
+// Result is cached in-memory per (categoryId, marketplaceId) for the life of
+// the server process — item aspects change rarely and the API is rate-limited.
+type AspectCatalog = Record<string, { required: boolean; allowed?: string[]; maxLen?: number; applicableTo?: string[]; usage?: string; cardinality?: string }>;
+const ASPECT_CACHE = new Map<string, { at: number; data: AspectCatalog }>();
+const ASPECT_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+
+export async function getItemAspectsForCategory(accessToken: string, categoryId: string, marketplaceId = "EBAY_US"): Promise<AspectCatalog> {
+  const key = `${marketplaceId}:${categoryId}`;
+  const hit = ASPECT_CACHE.get(key);
+  if (hit && Date.now() - hit.at < ASPECT_CACHE_TTL_MS) return hit.data;
   try {
     const treeRes = await fetch(`${EBAY_API_BASE}/commerce/taxonomy/v1/get_default_category_tree_id?marketplace_id=${marketplaceId}`, {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
     const tree = await treeRes.json();
-    if (!treeRes.ok) return {} as Record<string, { required: boolean; allowed?: string[]; maxLen?: number; applicableTo?: string[]; usage?: string; cardinality?: string }>;
+    if (!treeRes.ok) return {} as AspectCatalog;
     const res = await fetch(`${EBAY_API_BASE}/commerce/taxonomy/v1/category_tree/${tree.categoryTreeId}/get_item_aspects_for_category?category_id=${encodeURIComponent(categoryId)}`, {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
     const json = await res.json();
     if (!res.ok) return {};
-    const out: Record<string, { required: boolean; allowed?: string[]; maxLen?: number; applicableTo?: string[]; usage?: string; cardinality?: string }> = {};
+    const out: AspectCatalog = {};
     for (const a of json.aspects || []) {
       const name = String(a?.localizedAspectName || "").trim();
       if (!name) continue;
@@ -590,9 +599,11 @@ export async function getItemAspectsForCategory(accessToken: string, categoryId:
         cardinality: c.itemToAspectCardinality,
       };
     }
+    ASPECT_CACHE.set(key, { at: Date.now(), data: out });
     return out;
   } catch { return {}; }
 }
+
 
 function filterAspectsByCategory(aspects: Record<string, string[]>, catalog: Record<string, { required: boolean; allowed?: string[]; maxLen?: number; applicableTo?: string[]; usage?: string; cardinality?: string }>, excludeNames: string[] = []) {
   const excluded = new Set(excludeNames.map((name) => cleanText(name).toLowerCase()).filter(Boolean));
