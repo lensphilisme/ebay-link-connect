@@ -74,27 +74,38 @@ function inferType(title: string, detail: any, draft: any) {
   return compactText(title).split(/\s+/).filter((w) => w.length > 2).slice(0, 4).join(" ").slice(0, 65) || "General Product";
 }
 
-function repairVariants(detail: any, draft: any, images: string[]) {
+function repairVariants(detail: any, draft: any, images: string[], stockByVid: Record<string, number> = {}) {
   const variants = detail?.variants || detail?.variantList || detail?.productVariants || draft?.profit?.variant_group?.variants || [];
   if (!Array.isArray(variants) || variants.length <= 1) return null;
   const productKey = compactText(detail?.productKeyEn || draft?.profit?.product_key);
   const axes = productKey ? productKey.split(/[-,/|>]+/).map((v) => compactText(v)).filter(Boolean) : [];
   const safeAxes = axes.length ? axes.map((a, i) => (/^type$/i.test(a) ? (i === 0 ? "Style" : `Option ${i + 1}`) : a)) : undefined;
   return {
-    variants: variants.map((v: any, i: number) => ({
-      vid: v.vid,
-      variantSku: v.variantSku || v.sku || v.vid || `${draft.sku}-${i + 1}`,
-      variantKey: compactText(v.variantKey || v.variantNameEn || v.variantSku || v.vid || `Option ${i + 1}`),
-      variantNameEn: v.variantNameEn,
-      variantImage: cleanImages(v.variantImage, v.image, images)[0] || images[0] || null,
-      variantSellPrice: Number(v.variantSellPrice ?? v.price ?? draft.price ?? 0),
-      price: Number(v.price ?? v.variantSellPrice ?? draft.price ?? 0),
-      inventory: Number(v.inventory || v.quantity || draft.quantity || 1),
-    })),
+    variants: variants.map((v: any, i: number) => {
+      // Prefer live stock from CJ stock endpoint (keyed by vid), then any inline
+      // inventory field on the variant. `null` means "unknown" — applyRuleToDraft
+      // then falls back to the user's rule default instead of publishing qty=1.
+      const vid = String(v?.vid || "");
+      const liveStock = vid && Object.prototype.hasOwnProperty.call(stockByVid, vid) ? Number(stockByVid[vid]) : undefined;
+      const inlineStock = [v?.inventory, v?.storageNum, v?.stockNum, v?.availableQuantity]
+        .map((n) => Number(n)).find((n) => Number.isFinite(n) && n >= 0);
+      const inv = Number.isFinite(liveStock as number) ? (liveStock as number) : (inlineStock ?? null);
+      return {
+        vid: v.vid,
+        variantSku: v.variantSku || v.sku || v.vid || `${draft.sku}-${i + 1}`,
+        variantKey: compactText(v.variantKey || v.variantNameEn || v.variantSku || v.vid || `Option ${i + 1}`),
+        variantNameEn: v.variantNameEn,
+        variantImage: cleanImages(v.variantImage, v.image, images)[0] || images[0] || null,
+        variantSellPrice: Number(v.variantSellPrice ?? v.price ?? draft.price ?? 0),
+        price: Number(v.price ?? v.variantSellPrice ?? draft.price ?? 0),
+        inventory: inv,
+      };
+    }),
     axes: safeAxes,
     productKey,
   };
 }
+
 
 // Reasonable defaults for aspects eBay commonly requires but CJ doesn't supply cleanly.
 const ASPECT_DEFAULTS: Record<string, string> = {
