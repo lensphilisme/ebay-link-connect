@@ -22,7 +22,20 @@ export const Route = createFileRoute("/_authenticated/products/")({
   component: ProductsPage,
 });
 
-const PAGE_SIZES = [10, 20, 40, 50, 100] as const;
+// CJ Dropshipping search API caps pageSize at 200; larger values 400 out.
+const PAGE_SIZES = [20, 50, 100, 200] as const;
+
+function pagerRange(current: number, total: number): (number | "…")[] {
+  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+  const out: (number | "…")[] = [1];
+  const start = Math.max(2, current - 1);
+  const end = Math.min(total - 1, current + 1);
+  if (start > 2) out.push("…");
+  for (let i = start; i <= end; i++) out.push(i);
+  if (end < total - 1) out.push("…");
+  out.push(total);
+  return out;
+}
 
 type Query = {
   keyword: string;
