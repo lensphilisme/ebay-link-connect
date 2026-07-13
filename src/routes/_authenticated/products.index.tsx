@@ -408,18 +408,36 @@ function ProductsPage() {
             <div className="text-xs text-muted-foreground">
               Page {query.pageNum} of {totalPages} · {total.toLocaleString()} results
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1 flex-wrap">
               <Button
                 variant="outline" size="sm"
                 disabled={query.pageNum <= 1 || isFetching}
                 onClick={() => setQuery((q) => ({ ...q, pageNum: q.pageNum - 1 }))}
+                aria-label="Previous page"
               >
                 <ChevronLeft className="h-4 w-4" /> Prev
               </Button>
+              {pagerRange(query.pageNum, totalPages).map((p, i) =>
+                p === "…" ? (
+                  <span key={`gap-${i}`} className="px-1.5 text-xs text-muted-foreground">…</span>
+                ) : (
+                  <Button
+                    key={p}
+                    variant={p === query.pageNum ? "default" : "outline"}
+                    size="sm"
+                    className="min-w-[2.25rem] px-2"
+                    disabled={isFetching}
+                    onClick={() => setQuery((q) => ({ ...q, pageNum: p }))}
+                  >
+                    {p}
+                  </Button>
+                ),
+              )}
               <Button
                 variant="outline" size="sm"
                 disabled={query.pageNum >= totalPages || isFetching}
                 onClick={() => setQuery((q) => ({ ...q, pageNum: q.pageNum + 1 }))}
+                aria-label="Next page"
               >
                 Next <ChevronRight className="h-4 w-4" />
               </Button>
