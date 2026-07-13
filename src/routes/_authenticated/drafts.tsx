@@ -45,14 +45,21 @@ function DraftsPage() {
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const [suggestions, setSuggestions] = useState<Record<string, any[]>>({});
   const [editDraft, setEditDraft] = useState<any | null>(null);
+  const [accountFilter, setAccountFilter] = useState<string>("all");
   const optimizeFn = useServerFn(optimizeDraftWithAi);
   const optimizeCopyFn = useServerFn(optimizeDraftCopyWithAi);
   const repairFn = useServerFn(repairDraftForEbay);
   const suggestFn = useServerFn(suggestEbayCategories);
   const pushFn = useServerFn(pushDraftsToEbay);
   const aiCatFn = useServerFn(aiDeepCategorySuggest);
+  const listAccountsFn = useServerFn(listEbayAccounts);
 
-  const { data: drafts = [], refetch, isLoading } = useQuery({
+  const { data: accounts = [] } = useQuery({
+    queryKey: ["ebay-accounts"],
+    queryFn: () => listAccountsFn(),
+  });
+
+  const { data: allDrafts = [], refetch, isLoading } = useQuery({
     queryKey: ["listing-drafts"],
     queryFn: async () => {
       const { data, error } = await supabase.from("listing_drafts").select("*").order("created_at", { ascending: false });
@@ -60,6 +67,11 @@ function DraftsPage() {
       return data || [];
     },
   });
+  const drafts = useMemo(() => {
+    if (accountFilter === "all") return allDrafts;
+    if (accountFilter === "unassigned") return allDrafts.filter((d: any) => !d.account_id);
+    return allDrafts.filter((d: any) => d.account_id === accountFilter);
+  }, [allDrafts, accountFilter]);
   const selectedIds = useMemo(() => Object.keys(selected).filter((id) => selected[id]), [selected]);
   const failedIds = useMemo(() => drafts.filter((d: any) => d.status === "failed").map((d: any) => d.id), [drafts]);
   const allSelected = drafts.length > 0 && selectedIds.length === drafts.length;
