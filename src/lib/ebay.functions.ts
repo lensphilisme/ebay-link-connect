@@ -603,6 +603,21 @@ export const pushDraftsToEbay = createServerFn({ method: "POST" })
   .inputValidator((data: { draftIds: string[] }) => data)
   .handler(async ({ data, context }: any) => {
     const { getFreshEbayTokenForAccount } = await import("./ebay.server");
+
+    // Preflight: refuse the whole batch unless at least one connected eBay
+    // account exists. Prevents the confusing "create a seller's account"
+    // error when the user deleted their account row in Settings.
+    const { data: connectedAccounts } = await context.supabase
+      .from("ebay_accounts")
+      .select("id, is_active")
+      .eq("user_id", context.userId)
+      .not("refresh_token", "is", null);
+    const activeConnected = (connectedAccounts || []).filter((a: any) => a.is_active);
+    if (activeConnected.length === 0) {
+      throw new Error("No connected eBay account. Open Settings → eBay accounts to connect one before pushing.");
+    }
+    const connectedIds = new Set(activeConnected.map((a: any) => a.id));
+
     const { data: drafts, error } = await context.supabase.from("listing_drafts").select("*").eq("user_id", context.userId).in("id", data.draftIds);
     if (error) throw error;
     const { data: rule } = await context.supabase.from("automation_rules").select("max_listing_quantity,round_to").eq("user_id", context.userId).maybeSingle();
