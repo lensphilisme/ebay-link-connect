@@ -634,6 +634,13 @@ export const pushDraftsToEbay = createServerFn({ method: "POST" })
     const results = [];
     for (const draft of drafts || []) {
       try {
+        // If the draft is pinned to an account that no longer exists (or was
+        // deactivated), reroute to the first active connected account rather
+        // than falling back to a stale env token.
+        if (draft.account_id && !connectedIds.has(draft.account_id)) {
+          draft.account_id = activeConnected[0].id;
+          await context.supabase.from("listing_drafts").update({ account_id: draft.account_id }).eq("id", draft.id);
+        }
         if (!draft.category_id) throw new Error("Missing eBay category");
         // Always hydrate the full CJ variant group first; a chosen VID must not publish alone when the product has sibling variants.
         let workingDraft = draft;
