@@ -22,7 +22,20 @@ export const Route = createFileRoute("/_authenticated/products/")({
   component: ProductsPage,
 });
 
-const PAGE_SIZES = [10, 20, 40, 50, 100] as const;
+// CJ Dropshipping search API caps pageSize at 200; larger values 400 out.
+const PAGE_SIZES = [20, 50, 100, 200] as const;
+
+function pagerRange(current: number, total: number): (number | "…")[] {
+  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+  const out: (number | "…")[] = [1];
+  const start = Math.max(2, current - 1);
+  const end = Math.min(total - 1, current + 1);
+  if (start > 2) out.push("…");
+  for (let i = start; i <= end; i++) out.push(i);
+  if (end < total - 1) out.push("…");
+  out.push(total);
+  return out;
+}
 
 type Query = {
   keyword: string;
@@ -395,18 +408,36 @@ function ProductsPage() {
             <div className="text-xs text-muted-foreground">
               Page {query.pageNum} of {totalPages} · {total.toLocaleString()} results
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1 flex-wrap">
               <Button
                 variant="outline" size="sm"
                 disabled={query.pageNum <= 1 || isFetching}
                 onClick={() => setQuery((q) => ({ ...q, pageNum: q.pageNum - 1 }))}
+                aria-label="Previous page"
               >
                 <ChevronLeft className="h-4 w-4" /> Prev
               </Button>
+              {pagerRange(query.pageNum, totalPages).map((p, i) =>
+                p === "…" ? (
+                  <span key={`gap-${i}`} className="px-1.5 text-xs text-muted-foreground">…</span>
+                ) : (
+                  <Button
+                    key={p}
+                    variant={p === query.pageNum ? "default" : "outline"}
+                    size="sm"
+                    className="min-w-[2.25rem] px-2"
+                    disabled={isFetching}
+                    onClick={() => setQuery((q) => ({ ...q, pageNum: p }))}
+                  >
+                    {p}
+                  </Button>
+                ),
+              )}
               <Button
                 variant="outline" size="sm"
                 disabled={query.pageNum >= totalPages || isFetching}
                 onClick={() => setQuery((q) => ({ ...q, pageNum: q.pageNum + 1 }))}
+                aria-label="Next page"
               >
                 Next <ChevronRight className="h-4 w-4" />
               </Button>

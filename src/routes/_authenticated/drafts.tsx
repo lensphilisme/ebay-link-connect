@@ -5,12 +5,14 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { optimizeDraftCopyWithAi, optimizeDraftWithAi, repairDraftForEbay } from "@/lib/ai.functions";
 import { aiDeepCategorySuggest, pushDraftsToEbay, stripBanAmazon, suggestEbayCategories } from "@/lib/ebay.functions";
+import { listEbayAccounts } from "@/lib/accounts.functions";
 import { supabase } from "@/integrations/supabase/client";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { AlertCircle, ChevronDown, Copy, FileEdit, Loader2, MoreHorizontal, Rocket, Search, Sparkles, Trash2, Wrench } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -43,14 +45,21 @@ function DraftsPage() {
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const [suggestions, setSuggestions] = useState<Record<string, any[]>>({});
   const [editDraft, setEditDraft] = useState<any | null>(null);
+  const [accountFilter, setAccountFilter] = useState<string>("all");
   const optimizeFn = useServerFn(optimizeDraftWithAi);
   const optimizeCopyFn = useServerFn(optimizeDraftCopyWithAi);
   const repairFn = useServerFn(repairDraftForEbay);
   const suggestFn = useServerFn(suggestEbayCategories);
   const pushFn = useServerFn(pushDraftsToEbay);
   const aiCatFn = useServerFn(aiDeepCategorySuggest);
+  const listAccountsFn = useServerFn(listEbayAccounts);
 
-  const { data: drafts = [], refetch, isLoading } = useQuery({
+  const { data: accounts = [] } = useQuery({
+    queryKey: ["ebay-accounts"],
+    queryFn: () => listAccountsFn(),
+  });
+
+  const { data: allDrafts = [], refetch, isLoading } = useQuery({
     queryKey: ["listing-drafts"],
     queryFn: async () => {
       const { data, error } = await supabase.from("listing_drafts").select("*").order("created_at", { ascending: false });
@@ -58,6 +67,11 @@ function DraftsPage() {
       return data || [];
     },
   });
+  const drafts = useMemo(() => {
+    if (accountFilter === "all") return allDrafts;
+    if (accountFilter === "unassigned") return allDrafts.filter((d: any) => !d.account_id);
+    return allDrafts.filter((d: any) => d.account_id === accountFilter);
+  }, [allDrafts, accountFilter]);
   const selectedIds = useMemo(() => Object.keys(selected).filter((id) => selected[id]), [selected]);
   const failedIds = useMemo(() => drafts.filter((d: any) => d.status === "failed").map((d: any) => d.id), [drafts]);
   const allSelected = drafts.length > 0 && selectedIds.length === drafts.length;
@@ -227,14 +241,38 @@ function DraftsPage() {
         <Button size="icon" disabled={!selectedIds.length || optimizeCopy.isPending} variant="outline" onClick={() => optimizeCopy.mutate(selectedIds)} aria-label="AI Optimized copy"><Sparkles className="h-4 w-4" /></Button>
         <Button size="icon" disabled={!selectedIds.length || repair.isPending} onClick={() => repair.mutate(selectedIds)} aria-label="Repair"><Wrench className="h-4 w-4" /></Button>
         <Button size="icon" disabled={!failedIds.length || repair.isPending} variant="outline" onClick={() => repair.mutate(failedIds)} aria-label="Repair failed"><Wrench className="h-4 w-4 text-destructive" /></Button>
-        <Button size="icon" disabled={!selectedIds.length || push.isPending} onClick={() => push.mutate(selectedIds)} aria-label="Push to eBay"><Rocket className="h-4 w-4" /></Button>
+        <Button size="icon" disabled={!selectedIds.length || push.isPending || accounts.filter((a: any) => a.connected && a.is_active).length === 0} onClick={() => push.mutate(selectedIds)} aria-label="Push to eBay"><Rocket className="h-4 w-4" /></Button>
         <Button size="icon" variant="outline" onClick={dedupKeepCheapest} aria-label="Deduplicate by image · keep cheapest">
           <Copy className="h-4 w-4" />
           {duplicateInfo.groupCount > 0 && <span className="ml-1 text-[10px] font-bold">{duplicateInfo.flagged.size}</span>}
         </Button>
         <Button size="icon" disabled={!selectedIds.length || bulkDelete.isPending} variant="destructive" onClick={() => bulkDelete.mutate(selectedIds)} aria-label="Delete"><Trash2 className="h-4 w-4" /></Button>
+        {accounts.length > 1 && (
+          <Select value={accountFilter} onValueChange={(v) => { setAccountFilter(v); setSelected({}); }}>
+            <SelectTrigger className="h-8 w-[150px] text-xs"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All accounts</SelectItem>
+              <SelectItem value="unassigned">Unassigned</SelectItem>
+              {(accounts as any[]).map((a) => (
+                <SelectItem key={a.id} value={a.id}>{a.account_name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
         <span className="ml-auto text-xs text-muted-foreground">{selectedIds.length}/{drafts.length} selected</span>
       </div>
+
+      {accounts.filter((a: any) => a.connected && a.is_active).length === 0 && (
+        <Card className="mb-3 p-3 border-destructive/40 bg-destructive/5">
+          <div className="flex items-start gap-2 text-xs">
+            <AlertCircle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <div className="font-medium text-destructive">No eBay account connected</div>
+              <div className="text-muted-foreground mt-0.5">You can edit and enrich drafts, but pushing to eBay is disabled until you connect an account in <Link to="/settings" className="underline">Settings</Link>.</div>
+            </div>
+          </div>
+        </Card>
+      )}
 
       {duplicateInfo.groupCount > 0 && (
         <Card className="mb-3 p-3 border-amber-500/40 bg-amber-500/5">
