@@ -247,8 +247,32 @@ function DraftsPage() {
           {duplicateInfo.groupCount > 0 && <span className="ml-1 text-[10px] font-bold">{duplicateInfo.flagged.size}</span>}
         </Button>
         <Button size="icon" disabled={!selectedIds.length || bulkDelete.isPending} variant="destructive" onClick={() => bulkDelete.mutate(selectedIds)} aria-label="Delete"><Trash2 className="h-4 w-4" /></Button>
+        {accounts.length > 1 && (
+          <Select value={accountFilter} onValueChange={(v) => { setAccountFilter(v); setSelected({}); }}>
+            <SelectTrigger className="h-8 w-[150px] text-xs"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All accounts</SelectItem>
+              <SelectItem value="unassigned">Unassigned</SelectItem>
+              {(accounts as any[]).map((a) => (
+                <SelectItem key={a.id} value={a.id}>{a.account_name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
         <span className="ml-auto text-xs text-muted-foreground">{selectedIds.length}/{drafts.length} selected</span>
       </div>
+
+      {accounts.filter((a: any) => a.connected && a.is_active).length === 0 && (
+        <Card className="mb-3 p-3 border-destructive/40 bg-destructive/5">
+          <div className="flex items-start gap-2 text-xs">
+            <AlertCircle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <div className="font-medium text-destructive">No eBay account connected</div>
+              <div className="text-muted-foreground mt-0.5">You can edit and enrich drafts, but pushing to eBay is disabled until you connect an account in <Link to="/settings" className="underline">Settings</Link>.</div>
+            </div>
+          </div>
+        </Card>
+      )}
 
       {duplicateInfo.groupCount > 0 && (
         <Card className="mb-3 p-3 border-amber-500/40 bg-amber-500/5">
