@@ -107,7 +107,11 @@ export async function refreshEbayAccessToken(refreshToken: string): Promise<Ebay
 }
 
 export async function getUserEbayCredential(supabase: any, userId: string): Promise<EbayCredential> {
-  // Prefer the multi-account ebay_accounts table (default = oldest active row).
+  // Multi-account is the single source of truth. If there is no connected
+  // ebay_accounts row we refuse the call — no legacy integration_credentials
+  // fallback. Otherwise deleting an account in Settings could silently keep
+  // using an old token and eBay rejects publish with "create a seller's
+  // account".
   const { data: acct } = await supabase
     .from("ebay_accounts")
     .select("access_token, refresh_token, token_expires_at")
@@ -117,24 +121,14 @@ export async function getUserEbayCredential(supabase: any, userId: string): Prom
     .order("created_at", { ascending: true })
     .limit(1)
     .maybeSingle();
-  if (acct?.refresh_token) {
-    return {
-      access_token: acct.access_token || undefined,
-      refresh_token: acct.refresh_token,
-      expires_at: acct.token_expires_at ? new Date(acct.token_expires_at).getTime() : undefined,
-    };
+  if (!acct?.refresh_token) {
+    throw new Error("No eBay account connected. Open Settings → eBay accounts and click 'Connect your eBay account.'");
   }
-  // Legacy fallback: integration_credentials
-  const { data } = await supabase
-    .from("integration_credentials")
-    .select("credentials")
-    .eq("user_id", userId)
-    .eq("provider", "ebay")
-    .eq("label", "default")
-    .maybeSingle();
-  const creds = (data?.credentials || {}) as EbayCredential;
-  if (!creds.refresh_token) throw new Error("Connect your eBay seller account in Settings first.");
-  return creds;
+  return {
+    access_token: acct.access_token || undefined,
+    refresh_token: acct.refresh_token,
+    expires_at: acct.token_expires_at ? new Date(acct.token_expires_at).getTime() : undefined,
+  };
 }
 
 async function getAccountRowById(supabase: any, userId: string, accountId: string) {
