@@ -612,18 +612,7 @@ export const pushDraftsToEbay = createServerFn({ method: "POST" })
             if (draftVariantCount(repaired) > draftVariantCount(workingDraft)) workingDraft = repaired;
           } catch { /* publish the existing draft if CJ refresh is unavailable */ }
         }
-        // Duplicate guard: refuse to push the same CJ product twice.
-        if (workingDraft.cj_product_id) {
-          const { data: existing } = await context.supabase
-            .from("ebay_listings")
-            .select("id,ebay_item_id")
-            .eq("user_id", context.userId)
-            .eq("cj_product_id", workingDraft.cj_product_id)
-            .in("status", ["active", "pushed"])
-            .limit(1)
-            .maybeSingle();
-          if (existing?.id) throw new Error(`Already listed on eBay (item ${existing.ebay_item_id || existing.id}). Skipping duplicate.`);
-        }
+        // Duplicate cache table is gone — publish is now the sole source of truth.
         // Ensure start_country is set from CJ so inventory location is valid.
         if (!draft.profit?.start_country) {
           try {
