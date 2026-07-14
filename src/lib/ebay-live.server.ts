@@ -1,4 +1,4 @@
-import { getFreshEbayTokenForAccount, EBAY_TRADING_ENDPOINT as _e } from "./ebay.server";
+// Pure helpers for live eBay API calls — no DB access here.
 
 const EBAY_API_BASE = process.env.EBAY_API_BASE || "https://api.ebay.com";
 const EBAY_TRADING_ENDPOINT = "https://api.ebay.com/ws/api.dll";
