@@ -152,6 +152,8 @@ export const deleteAccountRule = createServerFn({ method: "POST" })
   });
 
 // ------------------------- Combined dashboard summary -------------------------
+// Live listing stats moved to ebay-live.functions.ts (getLiveAccountsOverview).
+// This one returns drafts-only aggregates (fast, no eBay round-trip).
 
 export const getAccountsOverview = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
@@ -161,45 +163,22 @@ export const getAccountsOverview = createServerFn({ method: "GET" })
       .select("id, account_name, is_active");
     const list = accounts || [];
     if (list.length === 0) return { accounts: [] };
-
-    const [listings, drafts] = await Promise.all([
-      context.supabase
-        .from("ebay_listings")
-        .select("id, account_id, status, sales, views, price"),
-      context.supabase
-        .from("listing_drafts")
-        .select("id, account_id, status"),
-    ]);
-
+    const { data: drafts } = await context.supabase
+      .from("listing_drafts").select("id, account_id, status");
     const byAccount = new Map<string, any>();
     for (const a of list) {
       byAccount.set(a.id, {
-        id: a.id,
-        account_name: a.account_name,
-        is_active: a.is_active,
-        listings_active: 0,
-        listings_total: 0,
-        drafts_pending: 0,
-        drafts_failed: 0,
-        units_sold: 0,
-        views: 0,
-        gmv: 0,
+        id: a.id, account_name: a.account_name, is_active: a.is_active,
+        drafts_pending: 0, drafts_failed: 0, drafts_total: 0,
       });
     }
-    for (const l of listings.data || []) {
-      const agg = byAccount.get(l.account_id);
-      if (!agg) continue;
-      agg.listings_total++;
-      if (l.status === "active") agg.listings_active++;
-      agg.units_sold += l.sales || 0;
-      agg.views += l.views || 0;
-      agg.gmv += Number(l.price || 0) * (l.sales || 0);
-    }
-    for (const d of drafts.data || []) {
+    for (const d of drafts || []) {
       const agg = byAccount.get(d.account_id);
       if (!agg) continue;
+      agg.drafts_total++;
       if (d.status === "pending") agg.drafts_pending++;
       if (d.status === "failed") agg.drafts_failed++;
     }
     return { accounts: Array.from(byAccount.values()) };
   });
+

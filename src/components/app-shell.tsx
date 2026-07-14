@@ -8,6 +8,10 @@ import {
   ScrollText,
   LogOut,
   Bell,
+  ShoppingCart,
+  DollarSign,
+  BarChart3,
+  Megaphone,
 } from "lucide-react";
 import { type ReactNode } from "react";
 import { supabase } from "@/integrations/supabase/client";
@@ -18,12 +22,16 @@ import { Button } from "@/components/ui/button";
 import { ScrollToggleFab } from "./scroll-toggle-fab";
 
 const NAV = [
-  { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { to: "/products", label: "CJ Products", icon: PackageSearch },
-  { to: "/drafts", label: "Drafts", icon: FileEdit },
-  { to: "/optimizer", label: "Optimizer", icon: LineChart },
-  { to: "/logs", label: "Logs", icon: ScrollText },
-  { to: "/settings", label: "Settings", icon: Settings2 },
+  { to: "/dashboard", label: "Dashboard", short: "Home", icon: LayoutDashboard },
+  { to: "/products", label: "CJ Products", short: "Products", icon: PackageSearch },
+  { to: "/drafts", label: "Drafts", short: "Drafts", icon: FileEdit },
+  { to: "/optimizer", label: "Optimizer", short: "Optimize", icon: LineChart },
+  { to: "/orders", label: "Orders", short: "Orders", icon: ShoppingCart },
+  { to: "/finances", label: "Finances", short: "Money", icon: DollarSign },
+  { to: "/analytics", label: "Analytics", short: "Stats", icon: BarChart3 },
+  { to: "/marketing", label: "Marketing", short: "Ads", icon: Megaphone },
+  { to: "/logs", label: "Logs", short: "Logs", icon: ScrollText },
+  { to: "/settings", label: "Settings", short: "Settings", icon: Settings2 },
 ] as const;
 
 function NavList({ pathname, onNavigate }: { pathname: string; onNavigate?: () => void }) {
@@ -108,14 +116,14 @@ export function AppShell({ children, title, subtitle, actions }: {
           {children}
         </main>
       </div>
-      <nav className="fixed inset-x-0 bottom-0 z-40 flex gap-1 overflow-x-auto border-t border-border bg-card/95 px-1 py-1.5 shadow-[var(--shadow-elevated)] backdrop-blur lg:hidden">
+      <nav className="fixed inset-x-0 bottom-0 z-40 flex gap-0.5 overflow-x-auto border-t border-border bg-card/95 px-1 py-1 shadow-[var(--shadow-elevated)] backdrop-blur lg:hidden">
         {NAV.map((item) => {
           const active = pathname.startsWith(item.to);
           const Icon = item.icon;
           return (
-            <Link key={item.to} to={item.to} className={cn("flex min-w-[68px] flex-col items-center gap-0.5 rounded-md px-1 py-1.5 text-[10px] font-semibold transition", active ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-secondary hover:text-foreground")}>
+            <Link key={item.to} to={item.to} className={cn("flex min-w-[56px] flex-col items-center gap-0.5 rounded-md px-1 py-1 text-[9px] font-semibold transition shrink-0", active ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-secondary hover:text-foreground")}>
               <Icon className="h-4 w-4" />
-              <span className="truncate">{item.label.replace("CJ ", "")}</span>
+              <span className="truncate">{item.short}</span>
             </Link>
           );
         })}
