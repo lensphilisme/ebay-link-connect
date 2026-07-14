@@ -105,12 +105,8 @@ function ProductsPage() {
     enabled: pids.length > 0,
     queryFn: async () => {
       const map: Record<string, "listed" | "draft"> = {};
-      const [listings, drafts] = await Promise.all([
-        supabase.from("ebay_listings").select("cj_product_id,status").in("cj_product_id", pids),
-        supabase.from("listing_drafts").select("cj_product_id").in("cj_product_id", pids),
-      ]);
-      for (const r of listings.data || []) if (r.cj_product_id) map[r.cj_product_id] = "listed";
-      for (const r of drafts.data || []) if (r.cj_product_id && !map[r.cj_product_id]) map[r.cj_product_id] = "draft";
+      const { data: drafts } = await supabase.from("listing_drafts").select("cj_product_id").in("cj_product_id", pids);
+      for (const r of drafts || []) if (r.cj_product_id) map[r.cj_product_id] = "draft";
       return map;
     },
   });
