@@ -125,10 +125,11 @@ export const bulkSendCjToDrafts = createServerFn({ method: "POST" })
     ]);
     const ruleMap = new Map<string, string>();
     for (const r of rules || []) if (r.cj_category) ruleMap.set(String(r.cj_category).trim().toLowerCase(), r.account_id);
-    const defaultAccountId: string | null =
-      (accts || []).find((a: any) => a.is_active && a.refresh_token)?.id
-      || (accts || [])[0]?.id
-      || null;
+    const usable = (accts || []).filter((a: any) => a.is_active && a.refresh_token);
+    // Only auto-assign when there's exactly one connected account. With several
+    // connected accounts, an unmatched draft stays unassigned so the user is
+    // asked which seller to publish to (instead of silently using the first).
+    const defaultAccountId: string | null = usable.length === 1 ? usable[0].id : null;
     const routeAccount = (cjCategoryName: string | null | undefined): string | null => {
       const cat = String(cjCategoryName || "").trim();
       if (!cat) return defaultAccountId;
@@ -141,6 +142,7 @@ export const bulkSendCjToDrafts = createServerFn({ method: "POST" })
       }
       return defaultAccountId;
     };
+
 
     // Best-effort: fetch an eBay token once so we can auto-suggest a category per draft.
     let ebayToken: string | null = null;
