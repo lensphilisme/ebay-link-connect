@@ -53,11 +53,20 @@ function DraftsPage() {
   const pushFn = useServerFn(pushDraftsToEbay);
   const aiCatFn = useServerFn(aiDeepCategorySuggest);
   const listAccountsFn = useServerFn(listEbayAccounts);
+  const routeDraftsFn = useServerFn(applyAccountRoutingToDrafts);
 
   const { data: accounts = [] } = useQuery({
     queryKey: ["ebay-accounts"],
     queryFn: () => listAccountsFn(),
   });
+  const connectedAccounts = useMemo(
+    () => (accounts as any[]).filter((a) => a.connected && a.is_active),
+    [accounts],
+  );
+  // Account the user picked in the "which seller?" prompt for this push.
+  const [pendingPush, setPendingPush] = useState<string[] | null>(null);
+  const [pickedAccount, setPickedAccount] = useState<string>("");
+
 
   const { data: allDrafts = [], refetch, isLoading } = useQuery({
     queryKey: ["listing-drafts"],
