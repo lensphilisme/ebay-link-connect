@@ -562,7 +562,7 @@ export function applyRuleToDraft<T extends Record<string, any>>(draft: T, rule: 
 
 export const pushDraftsToEbay = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((data: { draftIds: string[] }) => data)
+  .inputValidator((data: { draftIds: string[]; accountId?: string | null }) => data)
   .handler(async ({ data, context }: any) => {
     const { getFreshEbayTokenForAccount } = await import("./ebay.server");
 
@@ -579,6 +579,28 @@ export const pushDraftsToEbay = createServerFn({ method: "POST" })
       throw new Error("No connected eBay account. Open Settings → eBay accounts to connect one before pushing.");
     }
     const connectedIds = new Set(activeConnected.map((a: any) => a.id));
+    // Explicit per-push override from the account picker.
+    const override = data.accountId && connectedIds.has(data.accountId) ? data.accountId : null;
+    if (data.accountId && !override) throw new Error("The chosen eBay account is not connected or is inactive.");
+
+    // Category → account rules, used to resolve drafts that were created
+    // before the routing rule (or the account) existed.
+    const { data: routingRules } = await context.supabase
+      .from("account_rules").select("account_id, cj_category").eq("user_id", context.userId);
+    const ruleMap = new Map<string, string>();
+    for (const r of routingRules || []) {
+      if (r.cj_category && connectedIds.has(r.account_id)) ruleMap.set(String(r.cj_category).trim().toLowerCase(), r.account_id);
+    }
+    const routeByCategory = (cat: string | null | undefined): string | null => {
+      const value = String(cat || "").trim();
+      if (!value) return null;
+      const segments = value.split(/[\/>|,]/).map((s: string) => s.trim()).filter(Boolean);
+      for (const c of [value, ...segments.reverse()]) {
+        const hit = ruleMap.get(c.toLowerCase());
+        if (hit) return hit;
+      }
+      return null;
+    };
 
     const { data: drafts, error } = await context.supabase.from("listing_drafts").select("*").eq("user_id", context.userId).in("id", data.draftIds);
     if (error) throw error;
@@ -596,13 +618,23 @@ export const pushDraftsToEbay = createServerFn({ method: "POST" })
     const results = [];
     for (const draft of drafts || []) {
       try {
-        // If the draft is pinned to an account that no longer exists (or was
-        // deactivated), reroute to the first active connected account rather
-        // than falling back to a stale env token.
-        if (draft.account_id && !connectedIds.has(draft.account_id)) {
-          draft.account_id = activeConnected[0].id;
-          await context.supabase.from("listing_drafts").update({ account_id: draft.account_id }).eq("id", draft.id);
+        // Resolve the target seller account deterministically — never "whichever
+        // account happens to be first". Order: explicit picker choice → the
+        // draft's own assignment → category routing rule → the only connected
+        // account. Anything else asks the user to choose.
+        const resolved =
+          override
+          || (draft.account_id && connectedIds.has(draft.account_id) ? draft.account_id : null)
+          || routeByCategory(draft.profit?.cj_category_name)
+          || (activeConnected.length === 1 ? activeConnected[0].id : null);
+        if (!resolved) {
+          throw new Error("NEEDS_ACCOUNT: Choose which eBay account to publish this draft to.");
         }
+        if (draft.account_id !== resolved) {
+          draft.account_id = resolved;
+          await context.supabase.from("listing_drafts").update({ account_id: resolved }).eq("id", draft.id);
+        }
+
         if (!draft.category_id) throw new Error("Missing eBay category");
         // Always hydrate the full CJ variant group first; a chosen VID must not publish alone when the product has sibling variants.
         let workingDraft = draft;
