@@ -120,12 +120,14 @@ export async function fetchEbayOrders(accessToken: string, limit = 50) {
 }
 
 // Finances API — recent monetary transactions (sales, fees, payouts).
+// NOTE: the Finances API lives on apiz.ebay.com, not api.ebay.com. Calling it
+// on the normal host returns a bare 404 ("Not Found").
 export async function fetchEbayTransactions(accessToken: string, limit = 50) {
-  const res = await fetch(`${EBAY_API_BASE}/sell/finances/v1/transaction?limit=${limit}`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
+  const res = await fetch(`${EBAY_FINANCES_BASE}/sell/finances/v1/transaction?limit=${limit}`, {
+    headers: { Authorization: `Bearer ${accessToken}`, "X-EBAY-C-MARKETPLACE-ID": "EBAY_US", Accept: "application/json" },
   });
   const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(`Finances: ${json.errors?.[0]?.message || res.statusText}`);
+  if (!res.ok) throw new Error(`Finances: ${financeHint(res.status, json)}`);
   const txns = (json.transactions || []).map((t: any) => ({
     id: t.transactionId,
     date: t.transactionDate,
@@ -150,10 +152,16 @@ export async function fetchEbayTrafficReport(accessToken: string) {
   const start = new Date(end.getTime() - 30 * 86400000);
   const fmt = (d: Date) => d.toISOString().slice(0, 10).replace(/-/g, "");
   const dr = `${fmt(start)}..${fmt(end)}`;
-  const url = `${EBAY_API_BASE}/sell/analytics/v1/traffic_report?dimension=DAY&metric=LISTING_IMPRESSION_TOTAL,LISTING_VIEWS_TOTAL,CLICK_THROUGH_RATE,SALES_CONVERSION_RATE&date_range=[${dr}]`;
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}`, "X-EBAY-C-MARKETPLACE-ID": "EBAY_US" } });
+  // date_range and marketplace_ids belong inside `filter`, not as top-level
+  // query params; the marketplace filter is required or eBay rejects the call.
+  const filter = `marketplace_ids:{EBAY_US},date_range:[${dr}]`;
+  const url = `${EBAY_API_BASE}/sell/analytics/v1/traffic_report`
+    + `?dimension=DAY&metric=LISTING_IMPRESSION_TOTAL,LISTING_VIEWS_TOTAL,CLICK_THROUGH_RATE,SALES_CONVERSION_RATE`
+    + `&filter=${encodeURIComponent(filter)}`;
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}`, "X-EBAY-C-MARKETPLACE-ID": "EBAY_US", Accept: "application/json" } });
   const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(`Analytics: ${json.errors?.[0]?.message || res.statusText}`);
+  if (!res.ok) throw new Error(`Analytics: ${scopeHint(res.status, json)}`);
+
   const records = (json.records || []).map((r: any) => {
     const row: Record<string, any> = { day: r.dimensionValues?.[0]?.value || "" };
     for (let i = 0; i < (r.metricValues || []).length; i++) {
