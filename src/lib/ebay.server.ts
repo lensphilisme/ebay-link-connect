@@ -16,7 +16,12 @@ const SCOPES = [
   "https://api.ebay.com/oauth/api_scope/sell.account",
   "https://api.ebay.com/oauth/api_scope/sell.fulfillment.readonly",
   "https://api.ebay.com/oauth/api_scope/sell.marketing.readonly",
+  // Needed by the Analytics (traffic report) and Finances (transactions) pages.
+  // Accounts connected before these were added must be reconnected once.
+  "https://api.ebay.com/oauth/api_scope/sell.analytics.readonly",
+  "https://api.ebay.com/oauth/api_scope/sell.finances",
 ].join(" ");
+
 
 function required(name: string) {
   const value = process.env[name];

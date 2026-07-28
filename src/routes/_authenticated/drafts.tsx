@@ -5,7 +5,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { optimizeDraftCopyWithAi, optimizeDraftWithAi, repairDraftForEbay } from "@/lib/ai.functions";
 import { aiDeepCategorySuggest, pushDraftsToEbay, stripBanAmazon, suggestEbayCategories } from "@/lib/ebay.functions";
-import { listEbayAccounts } from "@/lib/accounts.functions";
+import { applyAccountRoutingToDrafts, listEbayAccounts } from "@/lib/accounts.functions";
 import { supabase } from "@/integrations/supabase/client";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -53,11 +53,20 @@ function DraftsPage() {
   const pushFn = useServerFn(pushDraftsToEbay);
   const aiCatFn = useServerFn(aiDeepCategorySuggest);
   const listAccountsFn = useServerFn(listEbayAccounts);
+  const routeDraftsFn = useServerFn(applyAccountRoutingToDrafts);
 
   const { data: accounts = [] } = useQuery({
     queryKey: ["ebay-accounts"],
     queryFn: () => listAccountsFn(),
   });
+  const connectedAccounts = useMemo(
+    () => (accounts as any[]).filter((a) => a.connected && a.is_active),
+    [accounts],
+  );
+  // Account the user picked in the "which seller?" prompt for this push.
+  const [pendingPush, setPendingPush] = useState<string[] | null>(null);
+  const [pickedAccount, setPickedAccount] = useState<string>("");
+
 
   const { data: allDrafts = [], refetch, isLoading } = useQuery({
     queryKey: ["listing-drafts"],
@@ -148,7 +157,7 @@ function DraftsPage() {
 
   const [pushProgress, setPushProgress] = useState<{ done: number; total: number; current?: string } | null>(null);
   const push = useMutation({
-    mutationFn: async (ids: string[]) => {
+    mutationFn: async ({ ids, accountId }: { ids: string[]; accountId?: string | null }) => {
       setPushProgress({ done: 0, total: ids.length });
       const rows: any[] = [];
       for (let i = 0; i < ids.length; i++) {
@@ -156,7 +165,7 @@ function DraftsPage() {
         const draft = drafts.find((d: any) => d.id === id);
         setPushProgress({ done: i, total: ids.length, current: draft?.title });
         try {
-          const res = await pushFn({ data: { draftIds: [id] } });
+          const res = await pushFn({ data: { draftIds: [id], accountId: accountId || null } });
           rows.push(...(res || []));
         } catch (e) {
           const message = e instanceof Error ? e.message : String(e);
@@ -169,7 +178,13 @@ function DraftsPage() {
     onSuccess: (rows: any[]) => {
       const okCount = rows.filter((r) => r.ok).length;
       const failed = rows.filter((r) => !r.ok);
-      toast.success(`Pushed ${okCount}/${rows.length} draft(s)`);
+      const needsAccount = failed.filter((r) => r.needsAccount);
+      if (needsAccount.length) {
+        setPendingPush(needsAccount.map((r) => r.draftId));
+        toast.message(`${needsAccount.length} draft(s) need an eBay account — pick one to continue.`);
+      } else {
+        toast.success(`Pushed ${okCount}/${rows.length} draft(s)`);
+      }
       const feedbackLock = failed.find((r) => /low feedback rating/i.test(String(r.error || "")));
       if (feedbackLock) {
         toast.error("eBay blocked Fixed Price listings on this account (low feedback rating). Build feedback with a few small purchases/sales, or contact eBay to lift the limit.", { duration: 12000 });
@@ -179,7 +194,31 @@ function DraftsPage() {
       setTimeout(() => setPushProgress(null), 1500);
     },
     onError: (e: Error) => { toast.error(e.message); setPushProgress(null); },
+
   });
+
+  // Auto-link unassigned drafts to accounts via the category routing rules
+  // whenever the page loads or a new account is connected.
+  useEffect(() => {
+    if (connectedAccounts.length === 0) return;
+    routeDraftsFn()
+      .then((r: any) => { if (r?.updated) refetch(); })
+      .catch(() => { /* routing is best-effort */ });
+  }, [connectedAccounts.length]);
+
+  // Ask which seller to publish to when drafts have no account and more than
+  // one account is connected; otherwise push straight through.
+  function startPush(ids: string[]) {
+    if (!ids.length) return;
+    const unassigned = ids.filter((id) => !drafts.find((d: any) => d.id === id)?.account_id);
+    if (unassigned.length > 0 && connectedAccounts.length > 1) {
+      setPickedAccount("");
+      setPendingPush(ids);
+      return;
+    }
+    push.mutate({ ids });
+  }
+
 
   const bulkDelete = useMutation({
     mutationFn: async (ids: string[]) => {
@@ -241,7 +280,7 @@ function DraftsPage() {
         <Button size="icon" disabled={!selectedIds.length || optimizeCopy.isPending} variant="outline" onClick={() => optimizeCopy.mutate(selectedIds)} aria-label="AI Optimized copy"><Sparkles className="h-4 w-4" /></Button>
         <Button size="icon" disabled={!selectedIds.length || repair.isPending} onClick={() => repair.mutate(selectedIds)} aria-label="Repair"><Wrench className="h-4 w-4" /></Button>
         <Button size="icon" disabled={!failedIds.length || repair.isPending} variant="outline" onClick={() => repair.mutate(failedIds)} aria-label="Repair failed"><Wrench className="h-4 w-4 text-destructive" /></Button>
-        <Button size="icon" disabled={!selectedIds.length || push.isPending || accounts.filter((a: any) => a.connected && a.is_active).length === 0} onClick={() => push.mutate(selectedIds)} aria-label="Push to eBay"><Rocket className="h-4 w-4" /></Button>
+        <Button size="icon" disabled={!selectedIds.length || push.isPending || accounts.filter((a: any) => a.connected && a.is_active).length === 0} onClick={() => startPush(selectedIds)} aria-label="Push to eBay"><Rocket className="h-4 w-4" /></Button>
         <Button size="icon" variant="outline" onClick={dedupKeepCheapest} aria-label="Deduplicate by image · keep cheapest">
           <Copy className="h-4 w-4" />
           {duplicateInfo.groupCount > 0 && <span className="ml-1 text-[10px] font-bold">{duplicateInfo.flagged.size}</span>}
@@ -343,7 +382,7 @@ function DraftsPage() {
                           <DropdownMenuItem onClick={() => optimizeCopy.mutate([d.id])}>AI Optimized copy</DropdownMenuItem>
                           <DropdownMenuItem onClick={() => repair.mutate([d.id])}>Repair for eBay</DropdownMenuItem>
                           <DropdownMenuSeparator />
-                          <DropdownMenuItem onClick={() => push.mutate([d.id])}>Push to eBay</DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => startPush([d.id])}>Push to eBay</DropdownMenuItem>
                           <DropdownMenuItem className="text-destructive" onClick={() => bulkDelete.mutate([d.id])}>Delete draft</DropdownMenuItem>
                         </DropdownMenuContent>
                       </DropdownMenu>
@@ -377,6 +416,40 @@ function DraftsPage() {
         )}
       </Card>
       <EditDraftDialog draft={editDraft} onOpenChange={(open) => !open && setEditDraft(null)} onSaved={() => { setEditDraft(null); refetch(); }} />
+
+      <Dialog open={!!pendingPush} onOpenChange={(open) => !open && setPendingPush(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Which eBay account?</DialogTitle>
+            <DialogDescription>
+              {pendingPush?.length} draft(s) aren't linked to a seller yet. Pick the account to publish them to —
+              or set up category routing in Settings → Account routing so this happens automatically.
+            </DialogDescription>
+          </DialogHeader>
+          <Select value={pickedAccount} onValueChange={setPickedAccount}>
+            <SelectTrigger><SelectValue placeholder="Choose an eBay account" /></SelectTrigger>
+            <SelectContent>
+              {connectedAccounts.map((a: any) => (
+                <SelectItem key={a.id} value={a.id}>{a.account_name || a.ebay_user_id}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setPendingPush(null)}>Cancel</Button>
+            <Button
+              disabled={!pickedAccount}
+              onClick={() => {
+                const ids = pendingPush || [];
+                setPendingPush(null);
+                push.mutate({ ids, accountId: pickedAccount });
+              }}
+            >
+              Push to this account
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
     </AppShell>
   );
 }
