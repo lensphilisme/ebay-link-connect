@@ -1,7 +1,26 @@
 // Pure helpers for live eBay API calls — no DB access here.
 
 const EBAY_API_BASE = process.env.EBAY_API_BASE || "https://api.ebay.com";
+const EBAY_FINANCES_BASE = process.env.EBAY_FINANCES_BASE || "https://apiz.ebay.com";
 const EBAY_TRADING_ENDPOINT = "https://api.ebay.com/ws/api.dll";
+
+const RECONNECT = "Reconnect this eBay account in Settings → eBay accounts to grant the new permission.";
+
+function scopeHint(status: number, json: any) {
+  const msg = json?.errors?.[0]?.message || json?.message || "";
+  if (status === 401 || status === 403 || /access denied|insufficient/i.test(msg)) {
+    return `Access denied. ${RECONNECT}`;
+  }
+  return msg || `HTTP ${status}`;
+}
+
+function financeHint(status: number, json: any) {
+  const msg = json?.errors?.[0]?.message || json?.message || "";
+  if (status === 401 || status === 403) return `Access denied. ${RECONNECT}`;
+  if (status === 404) return "No payouts data for this account yet (Finances requires eBay managed payments).";
+  return msg || `HTTP ${status}`;
+}
+
 
 function tag(xml: string, name: string) {
   const m = xml.match(new RegExp(`<${name}[^>]*>([\\s\\S]*?)</${name}>`, "i"));
