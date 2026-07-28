@@ -182,3 +182,53 @@ export const getAccountsOverview = createServerFn({ method: "GET" })
     return { accounts: Array.from(byAccount.values()) };
   });
 
+
+// ------------------------- Draft ↔ account routing -------------------------
+// Assigns an eBay account to drafts that don't have one yet, using the CJ
+// category → account rules. Safe to call any time (e.g. after connecting a new
+// account or adding a rule); it never overwrites an existing assignment.
+
+export const applyAccountRoutingToDrafts = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }: any) => {
+    const [{ data: rules }, { data: drafts }] = await Promise.all([
+      context.supabase.from("account_rules").select("account_id, cj_category").eq("user_id", context.userId),
+      context.supabase.from("listing_drafts").select("id, profit").is("account_id", null).eq("user_id", context.userId),
+    ]);
+    if (!rules?.length || !drafts?.length) return { updated: 0 };
+
+    const { data: accounts } = await context.supabase
+      .from("ebay_accounts")
+      .select("id, is_active, refresh_token")
+      .eq("user_id", context.userId);
+    const usable = new Set(
+      (accounts || []).filter((a: any) => a.is_active && a.refresh_token).map((a: any) => a.id),
+    );
+
+    const ruleMap = new Map<string, string>();
+    for (const r of rules) {
+      if (r.cj_category && usable.has(r.account_id)) {
+        ruleMap.set(String(r.cj_category).trim().toLowerCase(), r.account_id);
+      }
+    }
+    const route = (cat: string | null | undefined): string | null => {
+      const value = String(cat || "").trim();
+      if (!value) return null;
+      const segments = value.split(/[\/>|,]/).map((s) => s.trim()).filter(Boolean);
+      for (const c of [value, ...segments.reverse()]) {
+        const hit = ruleMap.get(c.toLowerCase());
+        if (hit) return hit;
+      }
+      return null;
+    };
+
+    let updated = 0;
+    for (const d of drafts) {
+      const accountId = route((d.profit as any)?.cj_category_name);
+      if (!accountId) continue;
+      const { error } = await context.supabase
+        .from("listing_drafts").update({ account_id: accountId }).eq("id", d.id).eq("user_id", context.userId);
+      if (!error) updated++;
+    }
+    return { updated };
+  });
