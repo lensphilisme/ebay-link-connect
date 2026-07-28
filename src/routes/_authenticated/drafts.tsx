@@ -197,6 +197,29 @@ function DraftsPage() {
 
   });
 
+  // Auto-link unassigned drafts to accounts via the category routing rules
+  // whenever the page loads or a new account is connected.
+  useEffect(() => {
+    if (connectedAccounts.length === 0) return;
+    routeDraftsFn()
+      .then((r: any) => { if (r?.updated) refetch(); })
+      .catch(() => { /* routing is best-effort */ });
+  }, [connectedAccounts.length]);
+
+  // Ask which seller to publish to when drafts have no account and more than
+  // one account is connected; otherwise push straight through.
+  function startPush(ids: string[]) {
+    if (!ids.length) return;
+    const unassigned = ids.filter((id) => !drafts.find((d: any) => d.id === id)?.account_id);
+    if (unassigned.length > 0 && connectedAccounts.length > 1) {
+      setPickedAccount("");
+      setPendingPush(ids);
+      return;
+    }
+    push.mutate({ ids });
+  }
+
+
   const bulkDelete = useMutation({
     mutationFn: async (ids: string[]) => {
       const { error } = await supabase.from("listing_drafts").delete().in("id", ids);
