@@ -157,7 +157,7 @@ function DraftsPage() {
 
   const [pushProgress, setPushProgress] = useState<{ done: number; total: number; current?: string } | null>(null);
   const push = useMutation({
-    mutationFn: async (ids: string[]) => {
+    mutationFn: async ({ ids, accountId }: { ids: string[]; accountId?: string | null }) => {
       setPushProgress({ done: 0, total: ids.length });
       const rows: any[] = [];
       for (let i = 0; i < ids.length; i++) {
@@ -165,7 +165,7 @@ function DraftsPage() {
         const draft = drafts.find((d: any) => d.id === id);
         setPushProgress({ done: i, total: ids.length, current: draft?.title });
         try {
-          const res = await pushFn({ data: { draftIds: [id] } });
+          const res = await pushFn({ data: { draftIds: [id], accountId: accountId || null } });
           rows.push(...(res || []));
         } catch (e) {
           const message = e instanceof Error ? e.message : String(e);
@@ -178,7 +178,13 @@ function DraftsPage() {
     onSuccess: (rows: any[]) => {
       const okCount = rows.filter((r) => r.ok).length;
       const failed = rows.filter((r) => !r.ok);
-      toast.success(`Pushed ${okCount}/${rows.length} draft(s)`);
+      const needsAccount = failed.filter((r) => r.needsAccount);
+      if (needsAccount.length) {
+        setPendingPush(needsAccount.map((r) => r.draftId));
+        toast.message(`${needsAccount.length} draft(s) need an eBay account — pick one to continue.`);
+      } else {
+        toast.success(`Pushed ${okCount}/${rows.length} draft(s)`);
+      }
       const feedbackLock = failed.find((r) => /low feedback rating/i.test(String(r.error || "")));
       if (feedbackLock) {
         toast.error("eBay blocked Fixed Price listings on this account (low feedback rating). Build feedback with a few small purchases/sales, or contact eBay to lift the limit.", { duration: 12000 });
@@ -188,6 +194,7 @@ function DraftsPage() {
       setTimeout(() => setPushProgress(null), 1500);
     },
     onError: (e: Error) => { toast.error(e.message); setPushProgress(null); },
+
   });
 
   const bulkDelete = useMutation({
