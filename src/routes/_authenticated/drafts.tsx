@@ -416,6 +416,40 @@ function DraftsPage() {
         )}
       </Card>
       <EditDraftDialog draft={editDraft} onOpenChange={(open) => !open && setEditDraft(null)} onSaved={() => { setEditDraft(null); refetch(); }} />
+
+      <Dialog open={!!pendingPush} onOpenChange={(open) => !open && setPendingPush(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Which eBay account?</DialogTitle>
+            <DialogDescription>
+              {pendingPush?.length} draft(s) aren't linked to a seller yet. Pick the account to publish them to —
+              or set up category routing in Settings → Account routing so this happens automatically.
+            </DialogDescription>
+          </DialogHeader>
+          <Select value={pickedAccount} onValueChange={setPickedAccount}>
+            <SelectTrigger><SelectValue placeholder="Choose an eBay account" /></SelectTrigger>
+            <SelectContent>
+              {connectedAccounts.map((a: any) => (
+                <SelectItem key={a.id} value={a.id}>{a.account_name || a.ebay_user_id}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setPendingPush(null)}>Cancel</Button>
+            <Button
+              disabled={!pickedAccount}
+              onClick={() => {
+                const ids = pendingPush || [];
+                setPendingPush(null);
+                push.mutate({ ids, accountId: pickedAccount });
+              }}
+            >
+              Push to this account
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
     </AppShell>
   );
 }
