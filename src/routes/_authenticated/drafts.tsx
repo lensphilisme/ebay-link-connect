@@ -5,7 +5,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { optimizeDraftCopyWithAi, optimizeDraftWithAi, repairDraftForEbay } from "@/lib/ai.functions";
 import { aiDeepCategorySuggest, pushDraftsToEbay, stripBanAmazon, suggestEbayCategories } from "@/lib/ebay.functions";
-import { listEbayAccounts } from "@/lib/accounts.functions";
+import { applyAccountRoutingToDrafts, listEbayAccounts } from "@/lib/accounts.functions";
 import { supabase } from "@/integrations/supabase/client";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
