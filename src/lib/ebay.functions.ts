@@ -696,10 +696,17 @@ export const pushDraftsToEbay = createServerFn({ method: "POST" })
         results.push({ draftId: draft.id, ok: true, ...pushed });
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
+        // "Needs account" isn't a failure — the draft is fine, it just has no
+        // seller assigned yet. Leave its status untouched so the UI can prompt.
+        if (message.startsWith("NEEDS_ACCOUNT")) {
+          results.push({ draftId: draft.id, ok: false, needsAccount: true, error: message.replace(/^NEEDS_ACCOUNT:\s*/, "") });
+          continue;
+        }
         await context.supabase.from("listing_drafts").update({ status: "failed", audit_reason: message }).eq("id", draft.id);
         await context.supabase.from("activity_logs").insert({ user_id: context.userId, level: "error", category: "ebay", message: `eBay push failed: ${draft.title}`, metadata: { draftId: draft.id, error: message } });
         results.push({ draftId: draft.id, ok: false, error: message });
       }
+
     }
     return results;
   });
