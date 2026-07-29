@@ -4,8 +4,10 @@ import { getFreshEbayTokenForAccount, reviseEbayListingText, endEbayFixedPriceLi
 import {
   fetchLiveListings, fetchLiveListingsSummary,
   fetchEbayOrders, fetchEbayTransactions, fetchEbayTrafficReport, fetchEbayCampaigns,
+  fetchEbaySalesSummary, SALES_WINDOW_LIMIT,
   type LiveListing,
 } from "./ebay-live.server";
+
 
 function requireAccount(accountId?: string | null) {
   if (!accountId) throw new Error("Pick an eBay account first.");
