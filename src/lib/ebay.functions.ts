@@ -214,7 +214,15 @@ async function autoRepairDraftFromCj(context: any, draft: any, reason: string) {
   return repaired;
 }
 
+// Errors that will repeat for every draft in the batch (account-wide blockers).
+function isFatalEbayError(message: string) {
+  return /\b25002\b/.test(message)
+    || /exceed the amount you can list|selling limit|monthly limit/i.test(message)
+    || /account (is )?(suspended|restricted)|not allowed to list/i.test(message);
+}
+
 function shouldAutoRepair(message: string) {
+
   return /variation|specific|is\s+missing|invalid data|imageUrl|country|location|mpn|gtin|upc|volume\s+is\s+not\s+allowed|already a member of another group/i.test(message);
 }
 
