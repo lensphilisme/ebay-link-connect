@@ -227,7 +227,12 @@ export const bulkSendCjToDrafts = createServerFn({ method: "POST" })
               profit: Number(desiredProfit.toFixed(2)),
               desired_profit: Number(desiredProfit.toFixed(2)),
               end_country: endCountry,
-              start_country: "CN",
+              start_country: (
+                filterStockCountry
+                || String(detail?.countryCode || detail?.countryFrom || detail?.sourceFrom || "").trim().toUpperCase()
+                || "CN"
+              ).slice(0, 2),
+
               product_key: detail?.productKeyEn || null,
               cj_category_name: cjCategoryName,
               ebay_category_path: categoryPath,
