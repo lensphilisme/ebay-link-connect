@@ -54,15 +54,18 @@ function DashboardPage() {
     acc.listings += a.listings_active || 0;
     acc.watchers += a.watchers || 0;
     acc.sold += a.units_sold || 0;
+    acc.orders += a.orders_count || 0;
+    acc.sales += a.sales_total || 0;
     return acc;
-  }, { listings: 0, watchers: 0, sold: 0 });
+  }, { listings: 0, watchers: 0, sold: 0, orders: 0, sales: 0 });
 
   const stats = [
     { Icon: Tag, label: "Live", v: totals.listings, tint: "violet" },
     { Icon: Eye, label: "Watchers", v: totals.watchers, tint: "sky" },
-    { Icon: ShoppingCart, label: "Sold", v: totals.sold, tint: "emerald" },
+    { Icon: ShoppingCart, label: "Orders", v: totals.orders, hint: `$${totals.sales.toFixed(0)} sales`, tint: "emerald" },
     { Icon: FileEdit, label: "Drafts", v: draftCounts?.pending ?? 0, hint: draftCounts?.failed ? `${draftCounts.failed} failed` : undefined, tint: "amber" },
   ];
+
 
   return (
     <AppShell
