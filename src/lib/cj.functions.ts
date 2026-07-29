@@ -96,12 +96,16 @@ export const getIntegrationStatus = createServerFn({ method: "GET" })
 // a draft that already includes shipping in its landed cost.
 export const bulkSendCjToDrafts = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((data: { pids: string[]; endCountry?: string }) => data)
+  .inputValidator((data: { pids: string[]; endCountry?: string; stockCountry?: string | null }) => data)
   .handler(async ({ data, context }: any) => {
     const pids: string[] = Array.from(new Set((data.pids || []).map(String).filter(Boolean))) as string[];
     if (pids.length === 0) throw new Error("No products selected");
     const endCountry = (data.endCountry || "US").toUpperCase();
+    // When the research page filtered by a warehouse country (e.g. US stock),
+    // that country is the real ship-from — never default such products to CN.
+    const filterStockCountry = String(data.stockCountry || "").trim().toUpperCase() || null;
     const token = await tok(context);
+
     const { data: rule } = await context.supabase
       .from("automation_rules")
       .select("markup_percent,ebay_fee_buffer_percent,max_listing_quantity")
@@ -223,7 +227,12 @@ export const bulkSendCjToDrafts = createServerFn({ method: "POST" })
               profit: Number(desiredProfit.toFixed(2)),
               desired_profit: Number(desiredProfit.toFixed(2)),
               end_country: endCountry,
-              start_country: "CN",
+              start_country: (
+                filterStockCountry
+                || String(detail?.countryCode || detail?.countryFrom || detail?.sourceFrom || "").trim().toUpperCase()
+                || "CN"
+              ).slice(0, 2),
+
               product_key: detail?.productKeyEn || null,
               cj_category_name: cjCategoryName,
               ebay_category_path: categoryPath,

@@ -214,7 +214,15 @@ async function autoRepairDraftFromCj(context: any, draft: any, reason: string) {
   return repaired;
 }
 
+// Errors that will repeat for every draft in the batch (account-wide blockers).
+function isFatalEbayError(message: string) {
+  return /\b25002\b/.test(message)
+    || /exceed the amount you can list|selling limit|monthly limit/i.test(message)
+    || /account (is )?(suspended|restricted)|not allowed to list/i.test(message);
+}
+
 function shouldAutoRepair(message: string) {
+
   return /variation|specific|is\s+missing|invalid data|imageUrl|country|location|mpn|gtin|upc|volume\s+is\s+not\s+allowed|already a member of another group/i.test(message);
 }
 
@@ -616,8 +624,16 @@ export const pushDraftsToEbay = createServerFn({ method: "POST" })
       return t;
     };
     const results = [];
+    // Set when eBay reports an account-wide blocker; the rest of the batch is
+    // skipped instead of hammering the API with certain-to-fail publishes.
+    let fatalStop: string | null = null;
     for (const draft of drafts || []) {
+      if (fatalStop) {
+        results.push({ draftId: draft.id, ok: false, skipped: true, error: `Skipped — ${fatalStop}` });
+        continue;
+      }
       try {
+
         // Resolve the target seller account deterministically — never "whichever
         // account happens to be first". Order: explicit picker choice → the
         // draft's own assignment → category routing rule → the only connected
@@ -678,11 +694,21 @@ export const pushDraftsToEbay = createServerFn({ method: "POST" })
           } catch (err) {
             lastError = err;
             const message = err instanceof Error ? err.message : String(err);
-            if (!draft.cj_product_id || !shouldAutoRepair(message) || attempt === 3) throw err;
-            workingDraft = await autoRepairDraftFromCj(context, workingDraft, message);
+            // Account-level blockers (listing limits, suspensions) will fail for
+            // every remaining draft too — stop the whole batch immediately.
+            if (isFatalEbayError(message)) { fatalStop = message; throw err; }
+            if (attempt === 3) throw err;
+            if (draft.cj_product_id && shouldAutoRepair(message)) {
+              workingDraft = await autoRepairDraftFromCj(context, workingDraft, message);
+            } else {
+              // Generic transient failure: retry twice with a short backoff.
+              if (attempt >= 2) throw err;
+              await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
+            }
           }
         }
         if (lastError) throw lastError;
+
 
         const expectedVariants = draftVariantCount(workingDraft);
         if (expectedVariants > 1 && (!pushed.listingId || Number(pushed.variantCount || 0) !== expectedVariants)) {

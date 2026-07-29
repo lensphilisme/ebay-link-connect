@@ -138,7 +138,7 @@ function ProductsPage() {
     mutationFn: async () => {
       const chosen = items.filter((p) => selected[p.pid]);
       if (chosen.length === 0) throw new Error("Nothing selected");
-      return bulkDraftFn({ data: { pids: chosen.map((p) => p.pid), endCountry: "US" } });
+      return bulkDraftFn({ data: { pids: chosen.map((p) => p.pid), endCountry: "US", stockCountry: countryCode === "all" ? null : countryCode } });
     },
     onSuccess: (res: any) => {
       const failed = (res.results || []).filter((r: any) => !r.ok).length;

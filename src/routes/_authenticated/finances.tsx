@@ -2,68 +2,66 @@ import { createFileRoute } from "@tanstack/react-router";
 import { AppShell } from "@/components/app-shell";
 import { AccountScopedPanel } from "@/components/account-scoped-panel";
 import { useServerFn } from "@tanstack/react-start";
-import { listEbayTransactionsFn } from "@/lib/ebay-live.functions";
+import { getEbaySalesSummaryFn } from "@/lib/ebay-live.functions";
 import { Card } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { DollarSign, TrendingUp, TrendingDown, Wallet } from "lucide-react";
+import { TrendingUp, ShoppingCart, Package } from "lucide-react";
 
-export const Route = createFileRoute("/_authenticated/finances")({ component: FinancesPage });
-
-const TYPE_COLOR: Record<string, string> = {
-  SALE: "text-emerald-600 bg-emerald-500/10",
-  REFUND: "text-destructive bg-destructive/10",
-  NON_SALE_CHARGE: "text-amber-600 bg-amber-500/10",
-  PAYOUT: "text-sky-600 bg-sky-500/10",
-};
+export const Route = createFileRoute("/_authenticated/finances")({
+  component: FinancesPage,
+  head: () => ({
+    meta: [
+      { title: "Money — eBay sales totals" },
+      { name: "description", content: "Live eBay sales totals for each connected seller account, matching the Orders feed." },
+      { property: "og:title", content: "Money — eBay sales totals" },
+      { property: "og:description", content: "Live eBay sales totals for each connected seller account." },
+      { property: "og:type", content: "website" },
+      { name: "twitter:card", content: "summary" },
+    ],
+  }),
+});
 
 function FinancesPage() {
-  const fn = useServerFn(listEbayTransactionsFn);
+  const fn = useServerFn(getEbaySalesSummaryFn);
   return (
-    <AppShell title="Finances" subtitle="Sales, fees & payouts">
+    <AppShell title="Money" subtitle="Sales from your live eBay orders">
       <AccountScopedPanel
-        queryKey="ebay-finances"
-        fetcher={(accountId) => fn({ data: { accountId, limit: 100 } })}
-        empty="Pick a connected account to see finances."
+        queryKey="ebay-sales"
+        fetcher={(accountId) => fn({ data: { accountId } })}
+        empty="Pick a connected account to see sales."
       >
         {(data: any) => {
-          const t = data.transactions as any[];
-          const sales = t.filter((x) => x.type === "SALE").reduce((s, x) => s + x.amount, 0);
-          const fees = t.filter((x) => /CHARGE|FEE/i.test(x.type)).reduce((s, x) => s + x.amount, 0);
-          const payouts = t.filter((x) => x.type === "PAYOUT").reduce((s, x) => s + x.amount, 0);
+          const orders: any[] = data.orders || [];
           return (
             <>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                <Mini Icon={TrendingUp} label="Sales" v={`$${sales.toFixed(2)}`} tint="emerald" />
-                <Mini Icon={TrendingDown} label="Fees" v={`$${fees.toFixed(2)}`} tint="amber" />
-                <Mini Icon={Wallet} label="Payouts" v={`$${payouts.toFixed(2)}`} tint="sky" />
-                <Mini Icon={DollarSign} label="Net" v={`$${(sales - fees).toFixed(2)}`} tint="violet" />
+              <div className="grid grid-cols-3 gap-2">
+                <Mini Icon={TrendingUp} label="Sales" v={`$${Number(data.sales || 0).toFixed(2)}`} tint="emerald" />
+                <Mini Icon={ShoppingCart} label="Orders" v={data.ordersCount ?? 0} tint="violet" />
+                <Mini Icon={Package} label="Items" v={data.units ?? 0} tint="sky" />
               </div>
               <Card className="overflow-hidden">
-                {t.length === 0 ? (
-                  <div className="p-8 text-center text-xs text-muted-foreground">No transactions.</div>
+                {orders.length === 0 ? (
+                  <div className="p-8 text-center text-xs text-muted-foreground">No sales in this window.</div>
                 ) : (
                   <div className="overflow-x-auto">
                     <Table>
                       <TableHeader>
                         <TableRow>
-                          <TableHead>Type</TableHead>
-                          <TableHead>Memo</TableHead>
+                          <TableHead>Item</TableHead>
                           <TableHead className="w-[80px] text-right">Amount</TableHead>
                           <TableHead className="w-[80px]">Date</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {t.map((x) => (
-                          <TableRow key={x.id}>
-                            <TableCell>
-                              <Badge variant="outline" className={`text-[10px] ${TYPE_COLOR[x.type] || ""}`}>{String(x.type || "").replace(/_/g, " ").toLowerCase()}</Badge>
+                        {orders.map((o) => (
+                          <TableRow key={o.orderId}>
+                            <TableCell className="text-xs max-w-[220px] truncate">{o.firstItemTitle || o.orderId}</TableCell>
+                            <TableCell className="text-xs font-semibold text-right tabular-nums text-emerald-600">
+                              ${Number(o.total || 0).toFixed(2)}
                             </TableCell>
-                            <TableCell className="text-xs max-w-[200px] truncate">{x.memo || x.orderId || "—"}</TableCell>
-                            <TableCell className={`text-xs font-semibold text-right tabular-nums ${x.type === "SALE" ? "text-emerald-600" : x.type?.includes("CHARGE") ? "text-destructive" : ""}`}>
-                              ${x.amount.toFixed(2)}
+                            <TableCell className="text-[10px] text-muted-foreground whitespace-nowrap">
+                              {new Date(o.creationDate).toLocaleDateString()}
                             </TableCell>
-                            <TableCell className="text-[10px] text-muted-foreground whitespace-nowrap">{new Date(x.date).toLocaleDateString()}</TableCell>
                           </TableRow>
                         ))}
                       </TableBody>
@@ -71,6 +69,9 @@ function FinancesPage() {
                   </div>
                 )}
               </Card>
+              <p className="text-[10px] text-muted-foreground px-1">
+                Only gross sales are shown — eBay fees and payouts are excluded because the fee feed is unreliable.
+              </p>
             </>
           );
         }}
@@ -81,9 +82,8 @@ function FinancesPage() {
 
 const TINT: Record<string, string> = {
   emerald: "text-emerald-600 bg-emerald-500/5 ring-emerald-500/20",
-  amber: "text-amber-600 bg-amber-500/5 ring-amber-500/20",
-  sky: "text-sky-600 bg-sky-500/5 ring-sky-500/20",
   violet: "text-violet-600 bg-violet-500/5 ring-violet-500/20",
+  sky: "text-sky-600 bg-sky-500/5 ring-sky-500/20",
 };
 
 function Mini({ Icon, label, v, tint }: { Icon: any; label: string; v: any; tint: string }) {
