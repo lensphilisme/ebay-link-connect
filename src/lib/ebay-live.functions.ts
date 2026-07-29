@@ -106,18 +106,24 @@ export const getLiveAccountsOverview = createServerFn({ method: "GET" })
     }
     const out = await Promise.all(list.map(async (a: any) => {
       const dr = draftAgg.get(a.id) || { pending: 0, failed: 0, total: 0 };
-      let listings_active = 0, watchers = 0, units_sold = 0, live_error: string | null = null;
+      let listings_active = 0, watchers = 0, units_sold = 0, orders_count = 0, sales_total = 0, live_error: string | null = null;
       if (a.is_active && a.refresh_token) {
         try {
           const token = await getFreshEbayTokenForAccount(context.supabase, context.userId, a.id);
           const s = await fetchLiveListingsSummary(token);
-          listings_active = s.total; watchers = s.totalWatchers; units_sold = s.totalSold;
+          listings_active = s.total; watchers = s.totalWatchers;
+          // Orders/sales come from the shared summary so the dashboard, Orders
+          // and Finances pages always show identical numbers.
+          try {
+            const sum = await fetchEbaySalesSummary(token);
+            orders_count = sum.ordersCount; sales_total = sum.sales; units_sold = sum.units;
+          } catch { units_sold = s.totalSold; }
         } catch (e) { live_error = e instanceof Error ? e.message : String(e); }
       }
       return {
         id: a.id, account_name: a.account_name, is_active: a.is_active,
         connected: !!a.refresh_token,
-        listings_active, watchers, units_sold,
+        listings_active, watchers, units_sold, orders_count, sales_total,
         drafts_pending: dr.pending, drafts_failed: dr.failed, drafts_total: dr.total,
         live_error,
       };
@@ -133,8 +139,20 @@ export const listEbayOrdersFn = createServerFn({ method: "POST" })
   .handler(async ({ data, context }: any) => {
     requireAccount(data.accountId);
     const token = await getFreshEbayTokenForAccount(context.supabase, context.userId, data.accountId);
-    return fetchEbayOrders(token, data.limit ?? 50);
+    return fetchEbayOrders(token, data.limit ?? SALES_WINDOW_LIMIT);
   });
+
+// Sales figure shared by the Finances page — same window as Orders.
+export const getEbaySalesSummaryFn = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d: { accountId: string }) => d)
+  .handler(async ({ data, context }: any) => {
+    requireAccount(data.accountId);
+    const token = await getFreshEbayTokenForAccount(context.supabase, context.userId, data.accountId);
+    const s = await fetchEbaySalesSummary(token);
+    return { ordersCount: s.ordersCount, sales: s.sales, units: s.units, orders: s.orders.slice(0, 100) };
+  });
+
 
 export const listEbayTransactionsFn = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
