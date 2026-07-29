@@ -16,7 +16,7 @@ function OrdersPage() {
     <AppShell title="Orders" subtitle="Live fulfillment feed">
       <AccountScopedPanel
         queryKey="ebay-orders"
-        fetcher={(accountId) => fn({ data: { accountId, limit: 50 } })}
+        fetcher={(accountId) => fn({ data: { accountId } })}
         empty="Pick a connected account to see recent orders."
       >
         {(orders: any[]) => (
