@@ -138,6 +138,17 @@ export async function fetchEbayOrders(accessToken: string, limit = 50) {
   }));
 }
 
+// Single source of truth for "orders" and "sales" everywhere in the app
+// (dashboard, Orders page, Finances page) so the three never disagree.
+export const SALES_WINDOW_LIMIT = 200;
+export async function fetchEbaySalesSummary(accessToken: string) {
+  const orders = await fetchEbayOrders(accessToken, SALES_WINDOW_LIMIT);
+  const sales = orders.reduce((s: number, o: any) => s + Number(o.total || 0), 0);
+  const units = orders.reduce((s: number, o: any) => s + Number(o.itemsCount || 0), 0);
+  return { orders, ordersCount: orders.length, sales: Number(sales.toFixed(2)), units };
+}
+
+
 // Finances API — recent monetary transactions (sales, fees, payouts).
 // NOTE: the Finances API lives on apiz.ebay.com, not api.ebay.com. Calling it
 // on the normal host returns a bare 404 ("Not Found").
