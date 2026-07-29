@@ -678,11 +678,21 @@ export const pushDraftsToEbay = createServerFn({ method: "POST" })
           } catch (err) {
             lastError = err;
             const message = err instanceof Error ? err.message : String(err);
-            if (!draft.cj_product_id || !shouldAutoRepair(message) || attempt === 3) throw err;
-            workingDraft = await autoRepairDraftFromCj(context, workingDraft, message);
+            // Account-level blockers (listing limits, suspensions) will fail for
+            // every remaining draft too — stop the whole batch immediately.
+            if (isFatalEbayError(message)) { fatalStop = message; throw err; }
+            if (attempt === 3) throw err;
+            if (draft.cj_product_id && shouldAutoRepair(message)) {
+              workingDraft = await autoRepairDraftFromCj(context, workingDraft, message);
+            } else {
+              // Generic transient failure: retry twice with a short backoff.
+              if (attempt >= 2) throw err;
+              await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
+            }
           }
         }
         if (lastError) throw lastError;
+
 
         const expectedVariants = draftVariantCount(workingDraft);
         if (expectedVariants > 1 && (!pushed.listingId || Number(pushed.variantCount || 0) !== expectedVariants)) {
