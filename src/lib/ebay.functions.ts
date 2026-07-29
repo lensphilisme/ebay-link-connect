@@ -616,8 +616,16 @@ export const pushDraftsToEbay = createServerFn({ method: "POST" })
       return t;
     };
     const results = [];
+    // Set when eBay reports an account-wide blocker; the rest of the batch is
+    // skipped instead of hammering the API with certain-to-fail publishes.
+    let fatalStop: string | null = null;
     for (const draft of drafts || []) {
+      if (fatalStop) {
+        results.push({ draftId: draft.id, ok: false, skipped: true, error: `Skipped — ${fatalStop}` });
+        continue;
+      }
       try {
+
         // Resolve the target seller account deterministically — never "whichever
         // account happens to be first". Order: explicit picker choice → the
         // draft's own assignment → category routing rule → the only connected
