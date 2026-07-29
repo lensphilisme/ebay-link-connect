@@ -166,9 +166,11 @@ export async function fetchEbayTransactions(accessToken: string, limit = 50) {
 }
 
 // Analytics API — 30-day traffic report.
+// eBay rejects any range that touches "today" in its own timezone, so the
+// window always ends yesterday (UTC) and covers the 30 days before that.
 export async function fetchEbayTrafficReport(accessToken: string) {
-  const end = new Date();
-  const start = new Date(end.getTime() - 30 * 86400000);
+  const end = new Date(Date.now() - 86400000);
+  const start = new Date(end.getTime() - 29 * 86400000);
   const fmt = (d: Date) => d.toISOString().slice(0, 10).replace(/-/g, "");
   const dr = `${fmt(start)}..${fmt(end)}`;
   // date_range and marketplace_ids belong inside `filter`, not as top-level
@@ -177,6 +179,7 @@ export async function fetchEbayTrafficReport(accessToken: string) {
   const url = `${EBAY_API_BASE}/sell/analytics/v1/traffic_report`
     + `?dimension=DAY&metric=LISTING_IMPRESSION_TOTAL,LISTING_VIEWS_TOTAL,CLICK_THROUGH_RATE,SALES_CONVERSION_RATE`
     + `&filter=${encodeURIComponent(filter)}`;
+
   const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}`, "X-EBAY-C-MARKETPLACE-ID": "EBAY_US", Accept: "application/json" } });
   const json = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(`Analytics: ${scopeHint(res.status, json)}`);
