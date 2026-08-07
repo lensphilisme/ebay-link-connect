@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { ebayConsentUrl, exchangeEbayCode, fetchActiveEbayListings, fetchEbayUsername, fetchItemImagesShopping, getCategorySuggestions, getEbayCategoryTreeShallow, getFreshEbayToken, publishInventoryItem, reviseEbayListingText, endEbayFixedPriceListing } from "./ebay.server";
+import { calculateRulePrice, roundPriceUp } from "./pricing";
 
 // Scrub the "Ban [anything] the sale of amazon" phrase eBay policy titles.
 // The phrase sometimes shows up truncated as just "Ban ", "Ban of", "Ban of the",
@@ -507,15 +508,7 @@ export const suggestEbayCategories = createServerFn({ method: "POST" })
 // Snap a price to the round_to rule (e.g. 0.99 → force cents to .99).
 // roundTo is a fractional value in [0, 1). Values outside that range fall back to 2-decimal rounding.
 export function roundPriceToRule(value: number, roundTo: number): number {
-  const price = Number(value);
-  if (!Number.isFinite(price) || price <= 0) return price;
-  const r = Number(roundTo);
-  if (!Number.isFinite(r) || r < 0 || r >= 1) return Number(price.toFixed(2));
-  const floor = Math.floor(price);
-  const snapped = floor + r;
-  // Never round DOWN below the computed price — always land on the next .r step up.
-  const out = snapped >= price ? snapped : snapped + 1;
-  return Number(out.toFixed(2));
+  return roundPriceUp(value, roundTo);
 }
 
 // Apply automation_rules (max_listing_quantity + round_to) to a draft copy,
@@ -544,16 +537,40 @@ export function applyRuleToDraft<T extends Record<string, any>>(draft: T, rule: 
     inv == null ? maxQty : (inv <= 0 ? 0 : Math.max(1, Math.min(inv, maxQty)));
   const rowInv = readInv(draft);
   const rowQty = targetQty(rowInv);
-  const roundedPrice = roundPriceToRule(Number(draft.price || 0), roundTo);
-  const patched: any = { ...draft, quantity: Math.max(1, rowQty || maxQty), price: roundedPrice };
+  const shipping = Number(draft.profit?.shipping ?? 0);
+  const storedItemCost = Number(draft.profit?.item_cost ?? 0);
+  const basePricing = storedItemCost > 0
+    ? calculateRulePrice(storedItemCost, shipping, rule || {})
+    : null;
+  const roundedPrice = basePricing?.sellPrice ?? roundPriceToRule(Number(draft.price || 0), roundTo);
+  const patched: any = {
+    ...draft,
+    quantity: rowQty,
+    price: roundedPrice,
+    profit: draft.profit && basePricing ? {
+      ...draft.profit,
+      item_cost: basePricing.itemCost,
+      shipping: basePricing.shipping,
+      desired_profit: basePricing.targetProfit,
+      profit: basePricing.projectedProfit,
+      ebay_fee: basePricing.ebayFee,
+      payment_fee: basePricing.paymentFee,
+      markup_pct: Number(rule?.markup_percent ?? draft.profit?.markup_pct ?? 50),
+      min_profit_usd: Number(rule?.min_profit_usd ?? draft.profit?.min_profit_usd ?? 0),
+      ebay_fee_pct: Number(rule?.ebay_fee_buffer_percent ?? 17) / 100,
+      payment_fee_pct: Number(rule?.payment_fee_buffer_percent ?? 0) / 100,
+    } : draft.profit,
+  };
   const patchVariants = (arr: any) => {
     if (!Array.isArray(arr)) return arr;
     return arr.map((v: any) => {
-      const p = Number(v?.price ?? v?.variantSellPrice ?? roundedPrice);
+      const variantCost = Number(v?.variantSellPrice ?? storedItemCost);
+      const variantPricing = variantCost > 0 ? calculateRulePrice(variantCost, shipping, rule || {}) : null;
+      const p = variantPricing?.sellPrice ?? Number(v?.price ?? roundedPrice);
       const inv = readInv(v);
-      const newQty = Math.max(1, targetQty(inv) || maxQty);
+      const newQty = targetQty(inv);
       const newPrice = roundPriceToRule(p, roundTo);
-      return { ...v, price: newPrice, variantSellPrice: newPrice, quantity: newQty, inventory: newQty };
+      return { ...v, price: newPrice, variantSellPrice: variantCost > 0 ? variantCost : v?.variantSellPrice, quantity: newQty, inventory: newQty };
     });
   };
 
@@ -612,7 +629,11 @@ export const pushDraftsToEbay = createServerFn({ method: "POST" })
 
     const { data: drafts, error } = await context.supabase.from("listing_drafts").select("*").eq("user_id", context.userId).in("id", data.draftIds);
     if (error) throw error;
-    const { data: rule } = await context.supabase.from("automation_rules").select("max_listing_quantity,round_to").eq("user_id", context.userId).maybeSingle();
+    const { data: rule } = await context.supabase
+      .from("automation_rules")
+      .select("markup_percent,min_profit_usd,ebay_fee_buffer_percent,payment_fee_buffer_percent,round_to,max_listing_quantity")
+      .eq("user_id", context.userId)
+      .maybeSingle();
     // Cache one token per account so each draft publishes to its assigned seller.
     const tokenCache = new Map<string | null, string>();
     const tokenFor = async (accountId: string | null | undefined): Promise<string> => {
@@ -711,7 +732,10 @@ export const pushDraftsToEbay = createServerFn({ method: "POST" })
 
 
         const expectedVariants = draftVariantCount(workingDraft);
-        if (expectedVariants > 1 && (!pushed.listingId || Number(pushed.variantCount || 0) !== expectedVariants)) {
+        if (!pushed.listingId) {
+          throw new Error("eBay did not return a listing ID. The draft was kept so you can retry safely.");
+        }
+        if (expectedVariants > 1 && Number(pushed.variantCount || 0) !== expectedVariants) {
           throw new Error(`eBay did not confirm all ${expectedVariants} variants were published. Nothing was marked pushed.`);
         }
 
