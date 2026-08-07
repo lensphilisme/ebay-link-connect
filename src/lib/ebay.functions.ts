@@ -545,7 +545,7 @@ export function applyRuleToDraft<T extends Record<string, any>>(draft: T, rule: 
   const roundedPrice = basePricing?.sellPrice ?? roundPriceToRule(Number(draft.price || 0), roundTo);
   const patched: any = {
     ...draft,
-    quantity: Math.max(1, rowQty || maxQty),
+    quantity: rowQty,
     price: roundedPrice,
     profit: draft.profit && basePricing ? {
       ...draft.profit,
@@ -568,7 +568,7 @@ export function applyRuleToDraft<T extends Record<string, any>>(draft: T, rule: 
       const variantPricing = variantCost > 0 ? calculateRulePrice(variantCost, shipping, rule || {}) : null;
       const p = variantPricing?.sellPrice ?? Number(v?.price ?? roundedPrice);
       const inv = readInv(v);
-      const newQty = Math.max(1, targetQty(inv) || maxQty);
+      const newQty = targetQty(inv);
       const newPrice = roundPriceToRule(p, roundTo);
       return { ...v, price: newPrice, variantSellPrice: variantCost > 0 ? variantCost : v?.variantSellPrice, quantity: newQty, inventory: newQty };
     });
@@ -732,7 +732,10 @@ export const pushDraftsToEbay = createServerFn({ method: "POST" })
 
 
         const expectedVariants = draftVariantCount(workingDraft);
-        if (expectedVariants > 1 && (!pushed.listingId || Number(pushed.variantCount || 0) !== expectedVariants)) {
+        if (!pushed.listingId) {
+          throw new Error("eBay did not return a listing ID. The draft was kept so you can retry safely.");
+        }
+        if (expectedVariants > 1 && Number(pushed.variantCount || 0) !== expectedVariants) {
           throw new Error(`eBay did not confirm all ${expectedVariants} variants were published. Nothing was marked pushed.`);
         }
 

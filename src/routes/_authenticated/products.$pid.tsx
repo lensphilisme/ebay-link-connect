@@ -291,7 +291,7 @@ function ProductDetailPage() {
                 <dt className="font-semibold">Projected profit</dt><dd className={`text-right font-semibold ${pricing.projectedProfit >= 0 ? "text-success" : "text-destructive"}`}>${pricing.projectedProfit.toFixed(2)}</dd>
               </dl>
               <Button className="w-full" onClick={() => sendToDraft.mutate()} disabled={sendToDraft.isPending}>
-                <FileEdit className="h-4 w-4 mr-1" /> {sendToDraft.isPending ? "Saving…" : "Send to Drafts"}
+                <FileEdit className="h-4 w-4 mr-1" /> {sendToDraft.isPending ? "Quoting logistics & saving…" : "Send to Drafts"}
               </Button>
             </Card>
 

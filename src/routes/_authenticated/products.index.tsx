@@ -59,7 +59,7 @@ function ProductsPage() {
   const [minPrice, setMinPrice] = useState<string>(initial?.minPrice ?? "");
   const [maxPrice, setMaxPrice] = useState<string>(initial?.maxPrice ?? "");
   const [catOpen, setCatOpen] = useState(false);
-  const [selected, setSelected] = useState<Record<string, boolean>>({});
+  const [selected, setSelected] = useState<Record<string, boolean>>(initial?.selected ?? {});
   const queryClient = useQueryClient();
 
   const searchFn = useServerFn(searchCjProducts);
@@ -86,7 +86,7 @@ function ProductsPage() {
     queryKey: ["cj-search", query],
     queryFn: () => searchFn({ data: query }),
     enabled: query.keyword.length > 0 || (query.categoryIds?.length ?? 0) > 0,
-    staleTime: 60_000,
+    staleTime: 10 * 60_000,
   });
 
   const items = data?.list ?? [];
@@ -96,8 +96,23 @@ function ProductsPage() {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    try { sessionStorage.setItem("cj-products-search", JSON.stringify({ keyword, query, categoryIds, countryCode, minPrice, maxPrice })); } catch { /* ignore */ }
-  }, [keyword, query, categoryIds, countryCode, minPrice, maxPrice]);
+    try { sessionStorage.setItem("cj-products-search", JSON.stringify({ keyword, query, categoryIds, countryCode, minPrice, maxPrice, selected, scrollY: window.scrollY })); } catch { /* ignore */ }
+  }, [keyword, query, categoryIds, countryCode, minPrice, maxPrice, selected]);
+
+  useEffect(() => {
+    const y = Number(initial?.scrollY ?? 0);
+    if (y > 0) requestAnimationFrame(() => window.scrollTo({ top: y, behavior: "instant" }));
+    const rememberScroll = () => {
+      try {
+        const saved = JSON.parse(sessionStorage.getItem("cj-products-search") || "{}");
+        sessionStorage.setItem("cj-products-search", JSON.stringify({ ...saved, scrollY: window.scrollY }));
+      } catch { /* ignore */ }
+    };
+    window.addEventListener("scroll", rememberScroll, { passive: true });
+    return () => window.removeEventListener("scroll", rememberScroll);
+    // Restore only once when returning to this route.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const pids = items.map((p) => p.pid);
   const { data: statusMap = {} } = useQuery({
@@ -391,7 +406,9 @@ function ProductsPage() {
                       {p.categoryName && (
                          <Badge variant="secondary" className="min-w-0 flex-1 justify-start truncate text-[10px]">{truncateName(p.categoryName, 18)}</Badge>
                       )}
-                       <span className="shrink-0 rounded-md bg-primary px-2 py-1 text-xs font-extrabold text-primary-foreground shadow-sm">${Number(p.sellPrice).toFixed(2)}</span>
+                       <span className="shrink-0 rounded-md bg-primary px-2 py-1 text-xs font-extrabold text-primary-foreground shadow-sm">
+                         {Number.isFinite(Number(p.sellPrice)) ? `$${Number(p.sellPrice).toFixed(2)}` : "Variants"}
+                       </span>
                     </div>
                   </div>
                 </Card>
