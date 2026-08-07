@@ -121,10 +121,10 @@ function ProductDetailPage() {
     staleTime: 60_000,
   });
 
-  const firstPricedVariant = variants.find((variant) => finitePositivePrice(variant?.variantSellPrice, variant?.sellPrice, variant?.price) != null) || variants[0];
+  const firstPricedVariant = variants.find((variant) => finitePositivePrice(variant?.variantSellPrice) != null) || variants[0];
   const activeVid = variantId || firstPricedVariant?.vid || "";
   const activeVariant = variants.find((v) => v.vid === activeVid);
-  const itemCost = finitePositivePrice(activeVariant?.variantSellPrice, activeVariant?.sellPrice, activeVariant?.price, p?.sellPrice) ?? 0;
+  const itemCost = finitePositivePrice(activeVariant?.variantSellPrice, p?.sellPrice) ?? 0;
 
   const freight = useMutation({
     mutationFn: async () => {
