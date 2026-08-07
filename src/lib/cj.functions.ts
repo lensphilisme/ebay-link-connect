@@ -17,6 +17,7 @@ import {
 } from "./cj.server";
 import { stripBanAmazon, deepScanEbayCategory } from "./ebay.functions";
 import { getFreshEbayToken } from "./ebay.server";
+import { calculateRulePrice, finitePositivePrice } from "./pricing";
 
 async function tok(ctx: any) {
   return getUserCjToken(ctx.supabase, ctx.userId);
@@ -96,7 +97,7 @@ export const getIntegrationStatus = createServerFn({ method: "GET" })
 // a draft that already includes shipping in its landed cost.
 export const bulkSendCjToDrafts = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((data: { pids: string[]; endCountry?: string; stockCountry?: string | null }) => data)
+  .inputValidator((data: { pids: string[]; endCountry?: string; stockCountry?: string | null; preferredVariantId?: string | null }) => data)
   .handler(async ({ data, context }: any) => {
     const pids: string[] = Array.from(new Set((data.pids || []).map(String).filter(Boolean))) as string[];
     if (pids.length === 0) throw new Error("No products selected");
@@ -108,11 +109,9 @@ export const bulkSendCjToDrafts = createServerFn({ method: "POST" })
 
     const { data: rule } = await context.supabase
       .from("automation_rules")
-      .select("markup_percent,ebay_fee_buffer_percent,max_listing_quantity")
+      .select("markup_percent,min_profit_usd,ebay_fee_buffer_percent,payment_fee_buffer_percent,round_to,max_listing_quantity")
       .eq("user_id", context.userId)
       .maybeSingle();
-    const markupPct = Number(rule?.markup_percent ?? 50);
-    const feePct = Number(rule?.ebay_fee_buffer_percent ?? 17) / 100;
     const targetQty = Math.max(1, Number(rule?.max_listing_quantity ?? 1));
 
     // Load account routing: cj_category → ebay_accounts.id. When a draft's
@@ -161,28 +160,37 @@ export const bulkSendCjToDrafts = createServerFn({ method: "POST" })
         try {
           const detail: any = await cjProductDetail(pid, endCountry, token);
           const variants: any[] = detail?.variants ?? detail?.variantList ?? detail?.productVariants ?? [];
-          const first = variants[0];
+          const pricedVariants = variants.filter((variant) => finitePositivePrice(variant?.variantSellPrice, variant?.sellPrice, variant?.price) != null);
+          const preferred = data.preferredVariantId
+            ? pricedVariants.find((variant) => String(variant?.vid) === String(data.preferredVariantId))
+            : null;
+          const first = preferred || pricedVariants[0] || variants[0];
           const vid = first?.vid || detail?.vid;
-          const itemCost = Number(first?.variantSellPrice ?? detail?.sellPrice ?? 0);
-          let shipping = itemCost * 0.2;
-          let carrierName: string | null = null;
-          let carrierDays: string | null = null;
-          if (vid) {
-            try {
-              const options = await cjFreightCalculate({ endCountryCode: endCountry, products: [{ vid, quantity: 1 }] }, token);
-              const cheapest = [...(options || [])].sort((a, b) => Number(a.logisticPrice ?? 0) - Number(b.logisticPrice ?? 0))[0];
-              if (cheapest) {
-                shipping = Number(cheapest.logisticPrice ?? shipping);
-                carrierName = cheapest.logisticName;
-                carrierDays = cheapest.logisticAging;
-              }
-            } catch { /* fall back to estimate */ }
-          }
-          const landed = itemCost + shipping;
-          const desiredProfit = landed * (markupPct / 100);
-          const preFee = landed + desiredProfit;
-          const ebayFee = preFee * feePct;
-          const finalSell = preFee + ebayFee;
+          const itemCost = finitePositivePrice(first?.variantSellPrice, first?.sellPrice, first?.price, detail?.sellPrice);
+          if (!vid) throw new Error("CJ did not return a usable variant for freight");
+          if (itemCost == null) throw new Error("CJ did not return a valid price for any variant");
+
+          const startCountry = (
+            filterStockCountry
+            || String(detail?.countryCode || detail?.countryFrom || detail?.sourceFrom || "").trim().toUpperCase()
+            || "CN"
+          ).slice(0, 2);
+          const options = await cjFreightCalculate({ startCountryCode: startCountry, endCountryCode: endCountry, products: [{ vid, quantity: 1 }] }, token);
+          const validOptions = (options || []).filter((option) => {
+            const price = Number(option?.logisticPrice);
+            return Number.isFinite(price) && price >= 0;
+          });
+          if (validOptions.length === 0) throw new Error("CJ did not return a valid logistics quote");
+          const fourToSevenDays = validOptions.filter((option) => {
+            const days = String(option?.logisticAging || "").match(/\d+/g)?.map(Number) || [];
+            return days.some((day) => day >= 4 && day <= 7);
+          });
+          const carrier = [...(fourToSevenDays.length ? fourToSevenDays : validOptions)]
+            .sort((a, b) => Number(a.logisticPrice) - Number(b.logisticPrice))[0];
+          const shipping = Number(carrier.logisticPrice);
+          const carrierName = carrier.logisticName || null;
+          const carrierDays = carrier.logisticAging || null;
+          const pricing = calculateRulePrice(itemCost, shipping, rule || {});
           const cjCategoryName = detail?.categoryName || null;
           const title = stripBanAmazon(String(detail?.productNameEn || "")).slice(0, 80);
           const images = [detail?.bigImage, detail?.productImage, ...(detail?.productImageSet || [])].filter(Boolean).slice(0, 12);
@@ -201,6 +209,20 @@ export const bulkSendCjToDrafts = createServerFn({ method: "POST" })
           }
 
           const assignedAccountId = routeAccount(cjCategoryName);
+          const allVariantRows = (variants.length ? variants : [first]).map((variant: any, index: number) => {
+            const variantCost = finitePositivePrice(variant?.variantSellPrice, variant?.sellPrice, variant?.price, itemCost) ?? itemCost;
+            const variantPricing = calculateRulePrice(variantCost, shipping, rule || {});
+            return {
+              vid: variant?.vid || vid,
+              variantSku: variant?.variantSku || variant?.sku || variant?.vid || `${detail?.productSku || pid}-${index + 1}`,
+              variantKey: variant?.variantKey || variant?.variantNameEn || variant?.variantSku || variant?.vid || `Option ${index + 1}`,
+              variantNameEn: variant?.variantNameEn,
+              variantImage: variant?.variantImage || images[0] || null,
+              variantSellPrice: variantCost,
+              price: variantPricing.sellPrice,
+              inventory: Number.isFinite(Number(variant?.inventory)) ? Number(variant.inventory) : null,
+            };
+          });
           const row = {
             user_id: context.userId,
             account_id: assignedAccountId,
@@ -208,7 +230,7 @@ export const bulkSendCjToDrafts = createServerFn({ method: "POST" })
             cj_variant_id: vid || null,
             sku: first?.variantSku || detail?.productSku || pid,
             title,
-            price: Number(finalSell.toFixed(2)),
+            price: pricing.sellPrice,
             quantity: targetQty,
             images,
             description: stripBanAmazon(detail?.description ?? ""),
@@ -217,26 +239,26 @@ export const bulkSendCjToDrafts = createServerFn({ method: "POST" })
             item_specifics: { Brand: "Unbranded", Condition: "New" },
 
             profit: {
-              item_cost: itemCost,
-              shipping: Number(shipping.toFixed(2)),
+              item_cost: pricing.itemCost,
+              shipping: pricing.shipping,
               carrier: carrierName,
               carrier_days: carrierDays,
-              markup_pct: markupPct,
-              ebay_fee_pct: feePct,
-              ebay_fee: Number(ebayFee.toFixed(2)),
-              profit: Number(desiredProfit.toFixed(2)),
-              desired_profit: Number(desiredProfit.toFixed(2)),
+              markup_pct: Number(rule?.markup_percent ?? 50),
+              min_profit_usd: Number(rule?.min_profit_usd ?? 0),
+              ebay_fee_pct: Number(rule?.ebay_fee_buffer_percent ?? 17) / 100,
+              payment_fee_pct: Number(rule?.payment_fee_buffer_percent ?? 0) / 100,
+              ebay_fee: pricing.ebayFee,
+              payment_fee: pricing.paymentFee,
+              profit: pricing.projectedProfit,
+              desired_profit: pricing.targetProfit,
               end_country: endCountry,
-              start_country: (
-                filterStockCountry
-                || String(detail?.countryCode || detail?.countryFrom || detail?.sourceFrom || "").trim().toUpperCase()
-                || "CN"
-              ).slice(0, 2),
+              start_country: startCountry,
 
               product_key: detail?.productKeyEn || null,
               cj_category_name: cjCategoryName,
               ebay_category_path: categoryPath,
               auto_quoted: true,
+              variant_group: allVariantRows.length > 1 ? { variants: allVariantRows } : null,
             },
           };
           const { data: saved } = await context.supabase
