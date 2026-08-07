@@ -2,8 +2,8 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { AppShell } from "@/components/app-shell";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { getCjProduct, getCjFreight } from "@/lib/cj.functions";
-import { useMemo, useState } from "react";
+import { bulkSendCjToDrafts, getCjProduct, getCjFreight } from "@/lib/cj.functions";
+import { useEffect, useMemo, useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -15,6 +15,7 @@ import { ArrowLeft, Loader2, Truck, FileEdit } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { classifyAxis } from "@/lib/variant-classifier";
+import { calculateRulePrice, finitePositivePrice } from "@/lib/pricing";
 
 export const Route = createFileRoute("/_authenticated/products/$pid")({
   component: ProductDetailPage,
@@ -28,8 +29,6 @@ const COUNTRIES = [
   { code: "DE", name: "Germany" },
   { code: "FR", name: "France" },
 ];
-
-const EBAY_FEE_PCT = 0.17;
 
 function cleanImageList(...inputs: unknown[]) {
   const urls: string[] = [];
@@ -85,6 +84,7 @@ function ProductDetailPage() {
   const { pid } = Route.useParams();
   const productFn = useServerFn(getCjProduct);
   const freightFn = useServerFn(getCjFreight);
+  const bulkDraftFn = useServerFn(bulkSendCjToDrafts);
   const navigate = useNavigate();
 
   const { data: p, isLoading, error } = useQuery({
@@ -111,11 +111,20 @@ function ProductDetailPage() {
 
   const [country, setCountry] = useState("US");
   const [variantId, setVariantId] = useState<string>("");
-  const [markupPct, setMarkupPct] = useState(50);
+  const { data: pricingRule } = useQuery({
+    queryKey: ["automation-rules"],
+    queryFn: async () => {
+      const { data, error: ruleError } = await supabase.from("automation_rules").select("*").maybeSingle();
+      if (ruleError) throw ruleError;
+      return data;
+    },
+    staleTime: 60_000,
+  });
 
-  const activeVid = variantId || variants[0]?.vid || "";
+  const firstPricedVariant = variants.find((variant) => finitePositivePrice(variant?.variantSellPrice, variant?.sellPrice, variant?.price) != null) || variants[0];
+  const activeVid = variantId || firstPricedVariant?.vid || "";
   const activeVariant = variants.find((v) => v.vid === activeVid);
-  const itemCost = Number(activeVariant?.variantSellPrice ?? p?.sellPrice ?? 0);
+  const itemCost = finitePositivePrice(activeVariant?.variantSellPrice, activeVariant?.sellPrice, activeVariant?.price, p?.sellPrice) ?? 0;
 
   const freight = useMutation({
     mutationFn: async () => {
@@ -126,69 +135,33 @@ function ProductDetailPage() {
     onError: (e: Error) => toast.error(e.message),
   });
   const [selectedCarrier, setSelectedCarrier] = useState<string>("");
-  const carrier = freight.data?.find((o) => o.logisticName === selectedCarrier) ?? freight.data?.[0];
-  const shipping = carrier?.logisticPrice ?? 0;
+  const validFreight = (freight.data || []).filter((option) => Number.isFinite(Number(option.logisticPrice)) && Number(option.logisticPrice) >= 0);
+  const preferredFreight = validFreight.filter((option) => {
+    const days = String(option.logisticAging || "").match(/\d+/g)?.map(Number) || [];
+    return days.some((day) => day >= 4 && day <= 7);
+  });
+  const cheapestCarrier = [...(preferredFreight.length ? preferredFreight : validFreight)].sort((a, b) => Number(a.logisticPrice) - Number(b.logisticPrice))[0];
+  const carrier = validFreight.find((o) => o.logisticName === selectedCarrier) ?? cheapestCarrier;
+  const shipping = Number(carrier?.logisticPrice ?? 0);
 
-  const landed = itemCost + shipping;
-  const desiredProfit = landed * (markupPct / 100);
-  const preFeePrice = landed + desiredProfit;
-  const ebayFee = preFeePrice * EBAY_FEE_PCT;
-  const finalSell = preFeePrice + ebayFee;
-  const profit = desiredProfit;
+  const pricing = calculateRulePrice(itemCost, shipping, pricingRule || {});
   const axes = useMemo(() => deriveAxes(variants), [variants]);
   const selectedOptions = activeVariant ? variantOptionMap(activeVariant, axes) : {};
-  const priceForVariant = (rawCost: unknown) => {
-    const variantCost = Number(rawCost ?? itemCost) || itemCost;
-    const variantLanded = variantCost + shipping;
-    const variantProfit = variantLanded * (markupPct / 100);
-    const variantPreFee = variantLanded + variantProfit;
-    return Number((variantPreFee + variantPreFee * EBAY_FEE_PCT).toFixed(2));
-  };
+
+  useEffect(() => {
+    if (!activeVid) return;
+    setSelectedCarrier("");
+    freight.mutate();
+    // Freight must refresh whenever the selected variant or destination changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeVid, country]);
 
   const sendToDraft = useMutation({
     mutationFn: async () => {
       if (!p) throw new Error("Loading…");
-      const { data: auth } = await supabase.auth.getUser();
-      if (!auth.user) throw new Error("Not signed in");
-      const allVariantRows = variants.map((v) => ({
-        vid: v.vid,
-        variantSku: v.variantSku || v.vid,
-        variantKey: v.variantKey || v.variantNameEn || v.variantSku || v.vid,
-        variantNameEn: v.variantNameEn,
-        variantImage: cleanImageList(v.variantImage)[0] || images[0] || null,
-        variantSellPrice: Number(v.variantSellPrice ?? p.sellPrice ?? 0),
-        price: priceForVariant(v.variantSellPrice),
-        inventory: Number(v.inventory || 1),
-      }));
-      const { error } = await supabase.from("listing_drafts").upsert({
-        user_id: auth.user.id,
-        cj_product_id: p.pid,
-        cj_variant_id: activeVid || null,
-        sku: activeVariant?.variantSku || p.productSku || p.pid,
-        title: (p.productNameEn || "").slice(0, 80),
-        price: Number(finalSell.toFixed(2)),
-        images: cleanImageList(activeVariant?.variantImage, images).slice(0, 12),
-        description: p.description ?? "",
-        item_specifics: { Brand: "Unbranded", Condition: "New", ...selectedOptions },
-        status: "pending" as const,
-        profit: {
-          item_cost: itemCost,
-          shipping,
-          carrier: carrier?.logisticName ?? null,
-          carrier_days: carrier?.logisticAging ?? null,
-          ebay_fee_pct: EBAY_FEE_PCT,
-          ebay_fee: Number(ebayFee.toFixed(2)),
-          desired_profit: Number(desiredProfit.toFixed(2)),
-          markup_pct: markupPct,
-          profit: Number(profit.toFixed(2)),
-          end_country: country,
-          start_country: "CN",
-          product_key: p.productKeyEn || null,
-          variant_axes: axes,
-          variant_group: allVariantRows.length > 1 ? { variants: allVariantRows } : null,
-        },
-      }, { onConflict: "user_id,cj_product_id" });
-      if (error) throw error;
+      const result = await bulkDraftFn({ data: { pids: [p.pid], endCountry: country, preferredVariantId: activeVid || null } });
+      const saved = result.results[0];
+      if (!saved?.ok) throw new Error(saved?.error || "Draft could not be created");
     },
     onSuccess: () => {
       toast.success("Draft saved");
@@ -304,17 +277,18 @@ function ProductDetailPage() {
             <Card className="p-4 space-y-3">
               <div className="text-sm font-medium">Pricing</div>
               <div>
-                <Label className="text-xs text-muted-foreground">Markup over landed cost: {markupPct}%</Label>
-                <Input type="range" min={10} max={300} step={5} value={markupPct} onChange={(e) => setMarkupPct(Number(e.target.value))} />
+                <Label className="text-xs text-muted-foreground">Settings markup: {Number(pricingRule?.markup_percent ?? 50)}%</Label>
+                <Input type="range" min={0} max={300} step={5} value={Number(pricingRule?.markup_percent ?? 50)} disabled />
               </div>
               <dl className="grid grid-cols-2 gap-y-1 text-sm">
                 <dt className="text-muted-foreground">Item cost</dt><dd className="text-right">${itemCost.toFixed(2)}</dd>
                 <dt className="text-muted-foreground">+ Shipping ({carrier?.logisticName ?? "—"})</dt><dd className="text-right">${shipping.toFixed(2)}</dd>
-                <dt className="font-medium">Landed cost</dt><dd className="text-right font-medium">${landed.toFixed(2)}</dd>
-                  <dt className="text-muted-foreground">Profit before fee</dt><dd className="text-right">${desiredProfit.toFixed(2)}</dd>
-                  <dt className="text-muted-foreground">eBay fee ({Math.round(EBAY_FEE_PCT * 100)}% of ${preFeePrice.toFixed(2)})</dt><dd className="text-right">${ebayFee.toFixed(2)}</dd>
-                <dt className="font-semibold">eBay sell price</dt><dd className="text-right font-semibold text-primary">${finalSell.toFixed(2)}</dd>
-                <dt className="font-semibold">Profit</dt><dd className={`text-right font-semibold ${profit >= 0 ? "text-success" : "text-destructive"}`}>${profit.toFixed(2)}</dd>
+                <dt className="font-medium">Landed cost</dt><dd className="text-right font-medium">${pricing.landedCost.toFixed(2)}</dd>
+                <dt className="text-muted-foreground">Minimum/markup profit</dt><dd className="text-right">${pricing.targetProfit.toFixed(2)}</dd>
+                <dt className="text-muted-foreground">eBay fee buffer</dt><dd className="text-right">${pricing.ebayFee.toFixed(2)}</dd>
+                <dt className="text-muted-foreground">Payment fee buffer</dt><dd className="text-right">${pricing.paymentFee.toFixed(2)}</dd>
+                <dt className="font-semibold">eBay sell price</dt><dd className="text-right font-semibold text-primary">${pricing.sellPrice.toFixed(2)}</dd>
+                <dt className="font-semibold">Projected profit</dt><dd className={`text-right font-semibold ${pricing.projectedProfit >= 0 ? "text-success" : "text-destructive"}`}>${pricing.projectedProfit.toFixed(2)}</dd>
               </dl>
               <Button className="w-full" onClick={() => sendToDraft.mutate()} disabled={sendToDraft.isPending}>
                 <FileEdit className="h-4 w-4 mr-1" /> {sendToDraft.isPending ? "Saving…" : "Send to Drafts"}
