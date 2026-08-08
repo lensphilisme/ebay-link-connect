@@ -97,7 +97,7 @@ export const getIntegrationStatus = createServerFn({ method: "GET" })
 // a draft that already includes shipping in its landed cost.
 export const bulkSendCjToDrafts = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((data: { pids: string[]; endCountry?: string; stockCountry?: string | null; preferredVariantId?: string | null }) => data)
+  .inputValidator((data: { pids: string[]; endCountry?: string; stockCountry?: string | null; preferredVariantId?: string | null; shippingOverride?: number | null; carrierOverride?: string | null }) => data)
   .handler(async ({ data, context }: any) => {
     const pids: string[] = Array.from(new Set((data.pids || []).map(String).filter(Boolean))) as string[];
     if (pids.length === 0) throw new Error("No products selected");
@@ -157,6 +157,7 @@ export const bulkSendCjToDrafts = createServerFn({ method: "POST" })
     for (let i = 0; i < pids.length; i += batchSize) {
       const batch = pids.slice(i, i + batchSize);
       const done = await Promise.all(batch.map(async (pid) => {
+        const notes: string[] = [];
         try {
           const detail: any = await cjProductDetail(pid, endCountry, token);
           const variants: any[] = detail?.variants ?? detail?.variantList ?? detail?.productVariants ?? [];
@@ -165,9 +166,8 @@ export const bulkSendCjToDrafts = createServerFn({ method: "POST" })
             ? pricedVariants.find((variant) => String(variant?.vid) === String(data.preferredVariantId))
             : null;
           const first = preferred || pricedVariants[0] || variants[0];
-          const vid = first?.vid || detail?.vid;
+          const vid = first?.vid || detail?.vid || null;
           const itemCost = finitePositivePrice(first?.variantSellPrice, first?.sellPrice, first?.price, detail?.sellPrice);
-          if (!vid) throw new Error("CJ did not return a usable variant for freight");
           if (itemCost == null) throw new Error("CJ did not return a valid price for any variant");
 
           const startCountry = (
@@ -175,22 +175,45 @@ export const bulkSendCjToDrafts = createServerFn({ method: "POST" })
             || String(detail?.countryCode || detail?.countryFrom || detail?.sourceFrom || "").trim().toUpperCase()
             || "CN"
           ).slice(0, 2);
-          const options = await cjFreightCalculate({ startCountryCode: startCountry, endCountryCode: endCountry, products: [{ vid, quantity: 1 }] }, token);
-          const validOptions = (options || []).filter((option) => {
-            const price = Number(option?.logisticPrice);
-            return Number.isFinite(price) && price >= 0;
-          });
-          if (validOptions.length === 0) throw new Error("CJ did not return a valid logistics quote");
-          const fourToSevenDays = validOptions.filter((option) => {
-            const days = String(option?.logisticAging || "").match(/\d+/g)?.map(Number) || [];
-            return days.some((day) => day >= 4 && day <= 7);
-          });
-          const carrier = [...(fourToSevenDays.length ? fourToSevenDays : validOptions)]
-            .sort((a, b) => Number(a.logisticPrice) - Number(b.logisticPrice))[0];
-          const shipping = Number(carrier.logisticPrice);
-          const carrierName = carrier.logisticName || null;
-          const carrierDays = carrier.logisticAging || null;
+
+          // Freight is best-effort: free-shipping items return nothing/0 from CJ,
+          // and some products expose no quotable variant. Never fail the draft
+          // for that — fall back to a caller-supplied quote or $0 shipping.
+          const overrideShipping = Number(data.shippingOverride);
+          const hasOverride = Number.isFinite(overrideShipping) && overrideShipping >= 0;
+          let shipping = hasOverride ? overrideShipping : 0;
+          let carrierName: string | null = hasOverride ? (data.carrierOverride ?? null) : null;
+          let carrierDays: string | null = null;
+          if (!hasOverride) {
+            if (!vid) {
+              notes.push("No quotable CJ variant — shipping treated as free ($0).");
+            } else {
+              try {
+                const options = await cjFreightCalculate({ startCountryCode: startCountry, endCountryCode: endCountry, products: [{ vid, quantity: 1 }] }, token);
+                const validOptions = (options || []).filter((option) => {
+                  const price = Number(option?.logisticPrice);
+                  return Number.isFinite(price) && price >= 0;
+                });
+                if (validOptions.length === 0) {
+                  notes.push("CJ returned no logistics quote — shipping treated as free ($0).");
+                } else {
+                  const fourToSevenDays = validOptions.filter((option) => {
+                    const days = String(option?.logisticAging || "").match(/\d+/g)?.map(Number) || [];
+                    return days.some((day) => day >= 4 && day <= 7);
+                  });
+                  const carrier = [...(fourToSevenDays.length ? fourToSevenDays : validOptions)]
+                    .sort((a, b) => Number(a.logisticPrice) - Number(b.logisticPrice))[0];
+                  shipping = Number(carrier.logisticPrice) || 0;
+                  carrierName = carrier.logisticName || null;
+                  carrierDays = carrier.logisticAging || null;
+                }
+              } catch (freightError) {
+                notes.push(`Freight quote failed (${freightError instanceof Error ? freightError.message : String(freightError)}) — shipping treated as free ($0).`);
+              }
+            }
+          }
           const pricing = calculateRulePrice(itemCost, shipping, rule || {});
+
           const cjCategoryName = detail?.categoryName || null;
           const title = stripBanAmazon(String(detail?.productNameEn || "")).slice(0, 80);
           const images = [detail?.bigImage, detail?.productImage, ...(detail?.productImageSet || [])].filter(Boolean).slice(0, 12);
@@ -261,15 +284,37 @@ export const bulkSendCjToDrafts = createServerFn({ method: "POST" })
               variant_group: allVariantRows.length > 1 ? { variants: allVariantRows } : null,
             },
           };
-          const { data: saved } = await context.supabase
+          const { data: saved, error: saveError } = await context.supabase
             .from("listing_drafts")
             .upsert(row, { onConflict: "user_id,cj_product_id", ignoreDuplicates: false })
             .select("id")
             .maybeSingle();
-          return { pid, ok: true, carrier: carrierName || undefined, shipping: Number(shipping.toFixed(2)), draftId: saved?.id, categoryId, accountId: assignedAccountId };
+          if (saveError) throw new Error(`Draft save failed: ${saveError.message}`);
+          if (notes.length) {
+            await context.supabase.from("activity_logs").insert({
+              user_id: context.userId,
+              account_id: assignedAccountId,
+              level: "warn",
+              category: "cj",
+              message: `Draft created with shipping fallback: ${title}`,
+              metadata: { pid, draftId: saved?.id, notes, shipping, startCountry, endCountry, variantCount: variants.length, vid },
+            });
+          }
+          return { pid, ok: true, carrier: carrierName || undefined, shipping: Number(shipping.toFixed(2)), draftId: saved?.id, categoryId, accountId: assignedAccountId, notes };
         } catch (e) {
-          return { pid, ok: false, error: e instanceof Error ? e.message : String(e) };
+          const message = e instanceof Error ? e.message : String(e);
+          try {
+            await context.supabase.from("activity_logs").insert({
+              user_id: context.userId,
+              level: "error",
+              category: "cj",
+              message: `Send to drafts failed: ${pid}`,
+              metadata: { pid, error: message, notes, endCountry, stockCountry: filterStockCountry },
+            });
+          } catch { /* logging must never mask the original failure */ }
+          return { pid, ok: false, error: message, notes };
         }
+
       }));
       results.push(...done);
     }

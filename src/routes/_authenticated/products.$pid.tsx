@@ -159,7 +159,17 @@ function ProductDetailPage() {
   const sendToDraft = useMutation({
     mutationFn: async () => {
       if (!p) throw new Error("Loading…");
-      const result = await bulkDraftFn({ data: { pids: [p.pid], endCountry: country, preferredVariantId: activeVid || null } });
+      // Reuse the freight already quoted on this page so we never re-quote (and
+      // never fail) at draft time; free-shipping items simply send $0.
+      const result = await bulkDraftFn({
+        data: {
+          pids: [p.pid],
+          endCountry: country,
+          preferredVariantId: activeVid || null,
+          shippingOverride: carrier ? shipping : null,
+          carrierOverride: carrier?.logisticName ?? null,
+        },
+      });
       const saved = result.results[0];
       if (!saved?.ok) throw new Error(saved?.error || "Draft could not be created");
     },
