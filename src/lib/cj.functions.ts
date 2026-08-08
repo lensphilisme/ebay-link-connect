@@ -97,7 +97,7 @@ export const getIntegrationStatus = createServerFn({ method: "GET" })
 // a draft that already includes shipping in its landed cost.
 export const bulkSendCjToDrafts = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((data: { pids: string[]; endCountry?: string; stockCountry?: string | null; preferredVariantId?: string | null }) => data)
+  .inputValidator((data: { pids: string[]; endCountry?: string; stockCountry?: string | null; preferredVariantId?: string | null; shippingOverride?: number | null; carrierOverride?: string | null }) => data)
   .handler(async ({ data, context }: any) => {
     const pids: string[] = Array.from(new Set((data.pids || []).map(String).filter(Boolean))) as string[];
     if (pids.length === 0) throw new Error("No products selected");
