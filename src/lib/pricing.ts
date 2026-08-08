@@ -61,8 +61,12 @@ export function calculateRulePrice(itemCostValue: unknown, shippingValue: unknow
 
 export function finitePositivePrice(...values: unknown[]): number | null {
   for (const value of values) {
-    const number = Number(value);
-    if (Number.isFinite(number) && number > 0) return number;
+    if (typeof value === "number" && Number.isFinite(value) && value > 0) return value;
+    if (typeof value !== "string") continue;
+    const matches = value.replace(/,/g, "").match(/\d+(?:\.\d+)?/g);
+    if (!matches) continue;
+    const prices = matches.map(Number).filter((price) => Number.isFinite(price) && price > 0);
+    if (prices.length > 0) return Math.min(...prices);
   }
   return null;
 }

@@ -18,6 +18,7 @@ import {
 import { stripBanAmazon, deepScanEbayCategory } from "./ebay.functions";
 import { getFreshEbayToken } from "./ebay.server";
 import { calculateRulePrice, finitePositivePrice } from "./pricing";
+import { getCjVariantPrice, getCjVariants } from "./cj-product";
 
 async function tok(ctx: any) {
   return getUserCjToken(ctx.supabase, ctx.userId);
@@ -160,14 +161,14 @@ export const bulkSendCjToDrafts = createServerFn({ method: "POST" })
         const notes: string[] = [];
         try {
           const detail: any = await cjProductDetail(pid, endCountry, token);
-          const variants: any[] = detail?.variants ?? detail?.variantList ?? detail?.productVariants ?? [];
-          const pricedVariants = variants.filter((variant) => finitePositivePrice(variant?.variantSellPrice, variant?.sellPrice, variant?.price) != null);
+          const variants = getCjVariants(detail);
+          const pricedVariants = variants.filter((variant) => getCjVariantPrice(variant, detail?.sellPrice) != null);
           const preferred = data.preferredVariantId
             ? pricedVariants.find((variant) => String(variant?.vid) === String(data.preferredVariantId))
             : null;
           const first = preferred || pricedVariants[0] || variants[0];
           const vid = first?.vid || detail?.vid || null;
-          const itemCost = finitePositivePrice(first?.variantSellPrice, first?.sellPrice, first?.price, detail?.sellPrice);
+          const itemCost = getCjVariantPrice(first, detail?.sellPrice);
           if (itemCost == null) throw new Error("CJ did not return a valid price for any variant");
 
           const startCountry = (
@@ -233,7 +234,7 @@ export const bulkSendCjToDrafts = createServerFn({ method: "POST" })
 
           const assignedAccountId = routeAccount(cjCategoryName);
           const allVariantRows = (variants.length ? variants : [first]).map((variant: any, index: number) => {
-            const variantCost = finitePositivePrice(variant?.variantSellPrice, variant?.sellPrice, variant?.price, itemCost) ?? itemCost;
+            const variantCost = getCjVariantPrice(variant, itemCost, detail?.sellPrice) ?? itemCost;
             const variantPricing = calculateRulePrice(variantCost, shipping, rule || {});
             return {
               vid: variant?.vid || vid,
