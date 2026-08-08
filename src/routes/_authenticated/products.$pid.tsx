@@ -15,7 +15,7 @@ import { ArrowLeft, Loader2, Truck, FileEdit } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { classifyAxis } from "@/lib/variant-classifier";
-import { calculateRulePrice, finitePositivePrice } from "@/lib/pricing";
+import { calculateRulePrice } from "@/lib/pricing";
 import { getCjVariantPrice, getCjVariants } from "@/lib/cj-product";
 
 export const Route = createFileRoute("/_authenticated/products/$pid")({

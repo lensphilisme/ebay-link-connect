@@ -17,7 +17,7 @@ import {
 } from "./cj.server";
 import { stripBanAmazon, deepScanEbayCategory } from "./ebay.functions";
 import { getFreshEbayToken } from "./ebay.server";
-import { calculateRulePrice, finitePositivePrice } from "./pricing";
+import { calculateRulePrice } from "./pricing";
 import { getCjVariantPrice, getCjVariants } from "./cj-product";
 
 async function tok(ctx: any) {
