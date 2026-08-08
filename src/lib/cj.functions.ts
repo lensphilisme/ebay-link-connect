@@ -284,15 +284,37 @@ export const bulkSendCjToDrafts = createServerFn({ method: "POST" })
               variant_group: allVariantRows.length > 1 ? { variants: allVariantRows } : null,
             },
           };
-          const { data: saved } = await context.supabase
+          const { data: saved, error: saveError } = await context.supabase
             .from("listing_drafts")
             .upsert(row, { onConflict: "user_id,cj_product_id", ignoreDuplicates: false })
             .select("id")
             .maybeSingle();
-          return { pid, ok: true, carrier: carrierName || undefined, shipping: Number(shipping.toFixed(2)), draftId: saved?.id, categoryId, accountId: assignedAccountId };
+          if (saveError) throw new Error(`Draft save failed: ${saveError.message}`);
+          if (notes.length) {
+            await context.supabase.from("activity_logs").insert({
+              user_id: context.userId,
+              account_id: assignedAccountId,
+              level: "warn",
+              category: "cj",
+              message: `Draft created with shipping fallback: ${title}`,
+              metadata: { pid, draftId: saved?.id, notes, shipping, startCountry, endCountry, variantCount: variants.length, vid },
+            });
+          }
+          return { pid, ok: true, carrier: carrierName || undefined, shipping: Number(shipping.toFixed(2)), draftId: saved?.id, categoryId, accountId: assignedAccountId, notes };
         } catch (e) {
-          return { pid, ok: false, error: e instanceof Error ? e.message : String(e) };
+          const message = e instanceof Error ? e.message : String(e);
+          try {
+            await context.supabase.from("activity_logs").insert({
+              user_id: context.userId,
+              level: "error",
+              category: "cj",
+              message: `Send to drafts failed: ${pid}`,
+              metadata: { pid, error: message, notes, endCountry, stockCountry: filterStockCountry },
+            });
+          } catch { /* logging must never mask the original failure */ }
+          return { pid, ok: false, error: message, notes };
         }
+
       }));
       results.push(...done);
     }
