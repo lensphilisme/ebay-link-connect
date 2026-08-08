@@ -15,7 +15,8 @@ import { ArrowLeft, Loader2, Truck, FileEdit } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { classifyAxis } from "@/lib/variant-classifier";
-import { calculateRulePrice, finitePositivePrice } from "@/lib/pricing";
+import { calculateRulePrice } from "@/lib/pricing";
+import { getCjVariantPrice, getCjVariants } from "@/lib/cj-product";
 
 export const Route = createFileRoute("/_authenticated/products/$pid")({
   component: ProductDetailPage,
@@ -94,8 +95,7 @@ function ProductDetailPage() {
   });
 
   const variants = useMemo(() => {
-    if (!p) return [];
-    return p.variants ?? p.variantList ?? p.productVariants ?? [];
+    return getCjVariants(p);
   }, [p]);
 
   const images = useMemo(() => {
@@ -121,10 +121,10 @@ function ProductDetailPage() {
     staleTime: 60_000,
   });
 
-  const firstPricedVariant = variants.find((variant) => finitePositivePrice(variant?.variantSellPrice) != null) || variants[0];
+  const firstPricedVariant = variants.find((variant) => getCjVariantPrice(variant, p?.sellPrice) != null) || variants[0];
   const activeVid = variantId || firstPricedVariant?.vid || "";
   const activeVariant = variants.find((v) => v.vid === activeVid);
-  const itemCost = finitePositivePrice(activeVariant?.variantSellPrice, p?.sellPrice) ?? 0;
+  const itemCost = getCjVariantPrice(activeVariant, p?.sellPrice) ?? 0;
 
   const freight = useMutation({
     mutationFn: async () => {
@@ -237,7 +237,7 @@ function ProductDetailPage() {
                   <SelectContent>
                     {variants.map((v) => (
                       <SelectItem key={v.vid} value={v.vid}>
-                        {v.variantNameEn || v.variantKey || v.variantSku} · ${Number(v.variantSellPrice ?? 0).toFixed(2)}
+                        {v.variantNameEn || v.variantKey || v.variantSku} · ${(getCjVariantPrice(v, p.sellPrice) ?? 0).toFixed(2)}
                       </SelectItem>
                     ))}
                   </SelectContent>
