@@ -313,10 +313,32 @@ export async function cjGetWarehouses(token?: string): Promise<CjWarehouse[]> {
   return cjFetch<CjWarehouse[]>("/product/globalWarehouseList", {}, token);
 }
 
+function detailHasVariants(detail: any): boolean {
+  for (const key of ["variants", "variantList", "productVariants", "variantData"]) {
+    const value = detail?.[key];
+    if (Array.isArray(value) && value.length > 0) return true;
+  }
+  return false;
+}
+
 export async function cjProductDetail(pid: string, countryCode?: string, token?: string): Promise<CjProductDetail> {
-  const q = new URLSearchParams({ pid, features: "enable_combine,enable_video" });
-  if (countryCode) q.set("countryCode", countryCode);
-  return cjFetch<CjProductDetail>(`/product/query?${q}`, {}, token);
+  const query = (country?: string) => {
+    const q = new URLSearchParams({ pid, features: "enable_combine,enable_video" });
+    if (country) q.set("countryCode", country);
+    return cjFetch<CjProductDetail>(`/product/query?${q}`, {}, token);
+  };
+  // A country-scoped query can come back with an empty variant list even when
+  // the plain query (the one the product detail page uses) returns them all.
+  // Always fall back so drafts see exactly what the detail page sees.
+  if (countryCode) {
+    const scoped = await query(countryCode).catch(() => null);
+    if (scoped && detailHasVariants(scoped)) return scoped;
+    const plain = await query().catch(() => null);
+    if (plain && detailHasVariants(plain)) return plain;
+    if (scoped) return scoped;
+    if (plain) return plain;
+  }
+  return query();
 }
 
 export type CjFreightOption = {
