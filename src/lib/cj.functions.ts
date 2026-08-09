@@ -177,42 +177,58 @@ export const bulkSendCjToDrafts = createServerFn({ method: "POST" })
             || "CN"
           ).slice(0, 2);
 
-          // Freight is best-effort: free-shipping items return nothing/0 from CJ,
-          // and some products expose no quotable variant. Never fail the draft
-          // for that — fall back to a caller-supplied quote or $0 shipping.
+          // Quote freight exactly like the product detail page does: try the
+          // selected/priced variants and both start countries until CJ answers.
           const overrideShipping = Number(data.shippingOverride);
           const hasOverride = Number.isFinite(overrideShipping) && overrideShipping >= 0;
           let shipping = hasOverride ? overrideShipping : 0;
           let carrierName: string | null = hasOverride ? (data.carrierOverride ?? null) : null;
           let carrierDays: string | null = null;
           if (!hasOverride) {
-            if (!vid) {
-              notes.push("No quotable CJ variant — shipping treated as free ($0).");
-            } else {
-              try {
-                const options = await cjFreightCalculate({ startCountryCode: startCountry, endCountryCode: endCountry, products: [{ vid, quantity: 1 }] }, token);
-                const validOptions = (options || []).filter((option) => {
-                  const price = Number(option?.logisticPrice);
-                  return Number.isFinite(price) && price >= 0;
-                });
-                if (validOptions.length === 0) {
-                  notes.push("CJ returned no logistics quote — shipping treated as free ($0).");
-                } else {
+            const candidateVids = Array.from(new Set(
+              [first, ...pricedVariants, ...variants]
+                .map((variant: any) => variant?.vid)
+                .concat(detail?.vid)
+                .filter(Boolean)
+                .map(String),
+            )).slice(0, 5);
+            if (candidateVids.length === 0) throw new Error("CJ returned no quotable variant for freight");
+
+            const startCandidates = Array.from(new Set([startCountry, "CN"]));
+            let picked: { price: number; name: string | null; days: string | null } | null = null;
+            let lastError: string | null = null;
+            outer: for (const candidateVid of candidateVids) {
+              for (const start of startCandidates) {
+                try {
+                  const options = await cjFreightCalculate({ startCountryCode: start, endCountryCode: endCountry, products: [{ vid: candidateVid, quantity: 1 }] }, token);
+                  const validOptions = (options || []).filter((option) => {
+                    const price = Number(option?.logisticPrice);
+                    return Number.isFinite(price) && price >= 0;
+                  });
+                  if (validOptions.length === 0) continue;
                   const fourToSevenDays = validOptions.filter((option) => {
                     const days = String(option?.logisticAging || "").match(/\d+/g)?.map(Number) || [];
                     return days.some((day) => day >= 4 && day <= 7);
                   });
                   const carrier = [...(fourToSevenDays.length ? fourToSevenDays : validOptions)]
                     .sort((a, b) => Number(a.logisticPrice) - Number(b.logisticPrice))[0];
-                  shipping = Number(carrier.logisticPrice) || 0;
-                  carrierName = carrier.logisticName || null;
-                  carrierDays = carrier.logisticAging || null;
+                  picked = {
+                    price: Number(carrier.logisticPrice) || 0,
+                    name: carrier.logisticName || null,
+                    days: carrier.logisticAging || null,
+                  };
+                  break outer;
+                } catch (freightError) {
+                  lastError = freightError instanceof Error ? freightError.message : String(freightError);
                 }
-              } catch (freightError) {
-                notes.push(`Freight quote failed (${freightError instanceof Error ? freightError.message : String(freightError)}) — shipping treated as free ($0).`);
               }
             }
+            if (!picked) throw new Error(`CJ freight quote unavailable${lastError ? ` (${lastError})` : ""}`);
+            shipping = picked.price;
+            carrierName = picked.name;
+            carrierDays = picked.days;
           }
+
           const pricing = calculateRulePrice(itemCost, shipping, rule || {});
 
           const cjCategoryName = detail?.categoryName || null;
@@ -297,10 +313,11 @@ export const bulkSendCjToDrafts = createServerFn({ method: "POST" })
               account_id: assignedAccountId,
               level: "warn",
               category: "cj",
-              message: `Draft created with shipping fallback: ${title}`,
+              message: `Draft created with notes: ${title}`,
               metadata: { pid, draftId: saved?.id, notes, shipping, startCountry, endCountry, variantCount: variants.length, vid },
             });
           }
+
           return { pid, ok: true, carrier: carrierName || undefined, shipping: Number(shipping.toFixed(2)), draftId: saved?.id, categoryId, accountId: assignedAccountId, notes };
         } catch (e) {
           const message = e instanceof Error ? e.message : String(e);
