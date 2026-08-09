@@ -313,10 +313,11 @@ export const bulkSendCjToDrafts = createServerFn({ method: "POST" })
               account_id: assignedAccountId,
               level: "warn",
               category: "cj",
-              message: `Draft created with shipping fallback: ${title}`,
+              message: `Draft created with notes: ${title}`,
               metadata: { pid, draftId: saved?.id, notes, shipping, startCountry, endCountry, variantCount: variants.length, vid },
             });
           }
+
           return { pid, ok: true, carrier: carrierName || undefined, shipping: Number(shipping.toFixed(2)), draftId: saved?.id, categoryId, accountId: assignedAccountId, notes };
         } catch (e) {
           const message = e instanceof Error ? e.message : String(e);
