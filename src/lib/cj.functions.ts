@@ -160,7 +160,11 @@ export const bulkSendCjToDrafts = createServerFn({ method: "POST" })
       const done = await Promise.all(batch.map(async (pid) => {
         const notes: string[] = [];
         try {
-          const detail: any = await cjProductDetail(pid, endCountry, token);
+          // Match the product detail page exactly. Its successful quote path
+          // loads the complete, unscoped product first; a destination-scoped
+          // product response can contain display variants without their `vid`,
+          // which cannot be sent to CJ's freight endpoint.
+          const detail: any = await cjProductDetail(pid, undefined, token);
           const variants = getCjVariants(detail);
           const pricedVariants = variants.filter((variant) => getCjVariantPrice(variant, detail?.sellPrice) != null);
           const preferred = data.preferredVariantId
@@ -177,8 +181,9 @@ export const bulkSendCjToDrafts = createServerFn({ method: "POST" })
             || "CN"
           ).slice(0, 2);
 
-          // Quote freight exactly like the product detail page does: try the
-          // selected/priced variants and both start countries until CJ answers.
+          // Quote freight exactly like the product detail page does. The detail
+          // page omits startCountryCode, so CJ defaults it to CN. A warehouse
+          // filter is the only reason to explicitly change the origin.
           const overrideShipping = Number(data.shippingOverride);
           const hasOverride = Number.isFinite(overrideShipping) && overrideShipping >= 0;
           let shipping = hasOverride ? overrideShipping : 0;
@@ -194,7 +199,9 @@ export const bulkSendCjToDrafts = createServerFn({ method: "POST" })
             )).slice(0, 5);
             if (candidateVids.length === 0) throw new Error("CJ returned no quotable variant for freight");
 
-            const startCandidates = Array.from(new Set([startCountry, "CN"]));
+            const startCandidates = filterStockCountry
+              ? Array.from(new Set([startCountry, "CN"]))
+              : ["CN"];
             let picked: { price: number; name: string | null; days: string | null } | null = null;
             let lastError: string | null = null;
             outer: for (const candidateVid of candidateVids) {
