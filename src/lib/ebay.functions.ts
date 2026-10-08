@@ -672,6 +672,16 @@ export const pushDraftsToEbay = createServerFn({ method: "POST" })
           await context.supabase.from("listing_drafts").update({ account_id: resolved }).eq("id", draft.id);
         }
 
+        {
+          const { checkListingPolicy, policyErrorMessage } = await import("./policy-guard");
+          const policy = checkListingPolicy({ title: draft.title, description: draft.description, category: draft.profit?.cj_category_name, brand: draft.item_specifics?.Brand });
+          if (!policy.ok) throw new Error(policyErrorMessage(policy));
+          if (policy.title !== draft.title || policy.description !== draft.description) {
+            draft.title = policy.title;
+            draft.description = policy.description;
+            await context.supabase.from("listing_drafts").update({ title: policy.title, description: policy.description }).eq("id", draft.id);
+          }
+        }
         if (!draft.category_id) throw new Error("Missing eBay category");
         // Always hydrate the full CJ variant group first; a chosen VID must not publish alone when the product has sibling variants.
         let workingDraft = draft;

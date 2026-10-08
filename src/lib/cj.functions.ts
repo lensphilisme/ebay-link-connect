@@ -239,7 +239,11 @@ export const bulkSendCjToDrafts = createServerFn({ method: "POST" })
           const pricing = calculateRulePrice(itemCost, shipping, rule || {});
 
           const cjCategoryName = detail?.categoryName || null;
-          const title = stripBanAmazon(String(detail?.productNameEn || "")).slice(0, 80);
+          const { checkListingPolicy, policyErrorMessage } = await import("./policy-guard");
+          const policy = checkListingPolicy({ title: detail?.productNameEn, description: detail?.description, category: cjCategoryName });
+          if (!policy.ok) throw new Error(policyErrorMessage(policy));
+          if (detail) detail.description = policy.description;
+          const title = stripBanAmazon(policy.title).slice(0, 80);
           const images = [detail?.bigImage, detail?.productImage, ...(detail?.productImageSet || [])].filter(Boolean).slice(0, 12);
 
           // Auto-suggest eBay category so drafts are ready to push.
