@@ -26,6 +26,7 @@ import { Route as AuthenticatedSettingsRouteImport } from './routes/_authenticat
 import { Route as EbayCallbackRouteImport } from './routes/ebay.callback'
 import { Route as AuthenticatedProductsIndexRouteImport } from './routes/_authenticated/products.index'
 import { Route as AuthenticatedProductsPidRouteImport } from './routes/_authenticated/products.$pid'
+import { Route as ApiPublicMetaCatalogUserIdTokenRouteImport } from './routes/api/public/meta-catalog.$userId.$token'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -113,6 +114,12 @@ const AuthenticatedProductsPidRoute =
     path: '/products/$pid',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
+const ApiPublicMetaCatalogUserIdTokenRoute =
+  ApiPublicMetaCatalogUserIdTokenRouteImport.update({
+    id: '/api/public/meta-catalog/$userId/$token',
+    path: '/api/public/meta-catalog/$userId/$token',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -131,6 +138,7 @@ export interface FileRoutesByFullPath {
   '/ebay/callback': typeof EbayCallbackRoute
   '/products/$pid': typeof AuthenticatedProductsPidRoute
   '/products/': typeof AuthenticatedProductsIndexRoute
+  '/api/public/meta-catalog/$userId/$token': typeof ApiPublicMetaCatalogUserIdTokenRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -149,6 +157,7 @@ export interface FileRoutesByTo {
   '/ebay/callback': typeof EbayCallbackRoute
   '/products/$pid': typeof AuthenticatedProductsPidRoute
   '/products': typeof AuthenticatedProductsIndexRoute
+  '/api/public/meta-catalog/$userId/$token': typeof ApiPublicMetaCatalogUserIdTokenRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -169,6 +178,7 @@ export interface FileRoutesById {
   '/ebay/callback': typeof EbayCallbackRoute
   '/_authenticated/products/$pid': typeof AuthenticatedProductsPidRoute
   '/_authenticated/products/': typeof AuthenticatedProductsIndexRoute
+  '/api/public/meta-catalog/$userId/$token': typeof ApiPublicMetaCatalogUserIdTokenRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -189,6 +199,7 @@ export interface FileRouteTypes {
     | '/ebay/callback'
     | '/products/$pid'
     | '/products/'
+    | '/api/public/meta-catalog/$userId/$token'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -207,6 +218,7 @@ export interface FileRouteTypes {
     | '/ebay/callback'
     | '/products/$pid'
     | '/products'
+    | '/api/public/meta-catalog/$userId/$token'
   id:
     | '__root__'
     | '/'
@@ -226,6 +238,7 @@ export interface FileRouteTypes {
     | '/ebay/callback'
     | '/_authenticated/products/$pid'
     | '/_authenticated/products/'
+    | '/api/public/meta-catalog/$userId/$token'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -234,6 +247,7 @@ export interface RootRouteChildren {
   AuthRoute: typeof AuthRoute
   SitemapDotxmlRoute: typeof SitemapDotxmlRoute
   EbayCallbackRoute: typeof EbayCallbackRoute
+  ApiPublicMetaCatalogUserIdTokenRoute: typeof ApiPublicMetaCatalogUserIdTokenRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -357,6 +371,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedProductsPidRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/api/public/meta-catalog/$userId/$token': {
+      id: '/api/public/meta-catalog/$userId/$token'
+      path: '/api/public/meta-catalog/$userId/$token'
+      fullPath: '/api/public/meta-catalog/$userId/$token'
+      preLoaderRoute: typeof ApiPublicMetaCatalogUserIdTokenRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -399,6 +420,7 @@ const rootRouteChildren: RootRouteChildren = {
   AuthRoute: AuthRoute,
   SitemapDotxmlRoute: SitemapDotxmlRoute,
   EbayCallbackRoute: EbayCallbackRoute,
+  ApiPublicMetaCatalogUserIdTokenRoute: ApiPublicMetaCatalogUserIdTokenRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
