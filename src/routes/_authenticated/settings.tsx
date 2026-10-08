@@ -15,6 +15,7 @@ import { AppUrlSettings } from "@/components/app-url-settings";
 import { RulesSettings } from "@/components/rules-settings";
 import { AccountsSettings } from "@/components/accounts-settings";
 import { AccountRulesSettings } from "@/components/account-rules-settings";
+import { MetaFeedSettings } from "@/components/meta-feed-settings";
 
 export const Route = createFileRoute("/_authenticated/settings")({ component: SettingsPage });
 
@@ -93,6 +94,10 @@ function SettingsPage() {
 
           <Section value="app-url" icon={Globe} title="App URL" status="Live domain">
             <AppUrlSettings />
+          </Section>
+
+          <Section value="meta-feed" icon={Boxes} title="Facebook & Instagram Shop" status="Live feed" ready>
+            <MetaFeedSettings />
           </Section>
 
           <Section value="ai" icon={KeyRound} title="Lovable AI (built-in)" status="Ready" ready>
